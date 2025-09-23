@@ -1,33 +1,30 @@
 import React, { useEffect, useState } from 'react'
-import { onAuthStateChanged, signInWithPhoneNumber } from 'firebase/auth'
-import { auth, setupRecaptcha } from './firebase'
+import { onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from 'firebase/auth'
+import { auth } from './firebase'
 import './pwa'
 
 export default function App() {
   const [user, setUser] = useState<any>(null)
-  const [phone, setPhone] = useState('')
-  const [code, setCode] = useState('')
-  const [confirmation, setConfirmation] = useState<any>(null)
-  const [status, setStatus] = useState<string>('')
+  const [mode, setMode] = useState<'login'|'signup'>('login')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [status, setStatus] = useState('')
 
-  useEffect(() => {
-    return onAuthStateChanged(auth, setUser)
-  }, [])
+  useEffect(() => onAuthStateChanged(auth, setUser), [])
 
-  async function sendCode(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    setStatus('Sending code...')
-    const verifier = setupRecaptcha('recaptcha-container')
-    const conf = await signInWithPhoneNumber(auth, phone, verifier)
-    setConfirmation(conf)
-    setStatus('Code sent.')
-  }
-
-  async function verifyCode(e: React.FormEvent) {
-    e.preventDefault()
-    setStatus('Verifying...')
-    await confirmation.confirm(code)
-    setStatus('Logged in.')
+    setStatus(mode === 'login' ? 'Signing in…' : 'Creating account…')
+    try {
+      if (mode === 'login') {
+        await signInWithEmailAndPassword(auth, email, password)
+      } else {
+        await createUserWithEmailAndPassword(auth, email, password)
+      }
+      setStatus('Success')
+    } catch (err: any) {
+      setStatus(err.message || 'Error')
+    }
   }
 
   if (!user) {
@@ -36,21 +33,31 @@ export default function App() {
         <h1 style={{color:'#4338CA'}}>Sedifex</h1>
         <p>Sell faster. Count smarter.</p>
 
-        <form onSubmit={sendCode} style={{marginTop:24}}>
-          <label>Phone (E.164 e.g. +233...)</label>
-          <input value={phone} onChange={e=>setPhone(e.target.value)} placeholder="+233..." style={{display:'block', width:'100%', padding:12, marginTop:8}} />
-          <button type="submit" style={{marginTop:12, padding:'10px 16px', background:'#4338CA', color:'#fff', borderRadius:8, border:0}}>Send Code</button>
+        <div style={{marginTop:16}}>
+          <button
+            onClick={() => setMode('login')}
+            style={{marginRight:8, padding:'6px 10px', borderRadius:8, border: mode==='login'?'2px solid #4338CA':'1px solid #ddd', background:'#fff'}}
+          >Login</button>
+          <button
+            onClick={() => setMode('signup')}
+            style={{padding:'6px 10px', borderRadius:8, border: mode==='signup'?'2px solid #4338CA':'1px solid #ddd', background:'#fff'}}
+          >Sign up</button>
+        </div>
+
+        <form onSubmit={handleSubmit} style={{marginTop:16}}>
+          <label>Email</label>
+          <input value={email} onChange={e=>setEmail(e.target.value)} type="email" required
+                 style={{display:'block', width:'100%', padding:12, marginTop:8}} />
+          <label style={{marginTop:12, display:'block'}}>Password</label>
+          <input value={password} onChange={e=>setPassword(e.target.value)} type="password" required
+                 style={{display:'block', width:'100%', padding:12, marginTop:8}} />
+          <button type="submit"
+                  style={{marginTop:12, padding:'10px 16px', background:'#4338CA', color:'#fff', borderRadius:8, border:0}}>
+            {mode==='login' ? 'Login' : 'Create account'}
+          </button>
         </form>
 
-        {confirmation && (
-          <form onSubmit={verifyCode} style={{marginTop:16}}>
-            <label>Enter code</label>
-            <input value={code} onChange={e=>setCode(e.target.value)} style={{display:'block', width:'100%', padding:12, marginTop:8}} />
-            <button type="submit" style={{marginTop:12, padding:'10px 16px', background:'#4338CA', color:'#fff', borderRadius:8, border:0}}>Verify</button>
-          </form>
-        )}
-
-        <p style={{marginTop:12}}>{status}</p>
+        <p style={{marginTop:12, color:'#555'}}>{status}</p>
       </div>
     )
   }
@@ -58,13 +65,10 @@ export default function App() {
   return (
     <div style={{maxWidth:720, margin:'40px auto', fontFamily:'Inter, system-ui, Arial'}}>
       <h1 style={{color:'#4338CA'}}>Sedifex</h1>
-      <p>Logged in as <strong>{user.phoneNumber || user.email}</strong></p>
-      <ul style={{marginTop:24, lineHeight:1.8}}>
-        <li>Installable PWA (Manifest + Service Worker)</li>
-        <li>Firebase Auth (Phone)</li>
-        <li>Ready to add Firestore collections (products, sales, etc.)</li>
-      </ul>
-      <p style={{marginTop:24}}>Start building your <strong>Sell</strong>, <strong>Products</strong>, and <strong>Close-of-day</strong> screens here.</p>
+      <p>Logged in as <strong>{user.email}</strong></p>
+      <button onClick={() => signOut(auth)}
+              style={{marginTop:12, padding:'8px 12px', borderRadius:8, border:'1px solid #ddd'}}>Sign out</button>
+      <p style={{marginTop:24}}>Next: Products & Sell screen.</p>
     </div>
   )
 }
