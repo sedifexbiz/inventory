@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { collection, addDoc, onSnapshot, query, where, orderBy } from 'firebase/firestore'
 import { db } from '../firebase'
+import { auth } from '../firebase' // NEW
 
 type Product = {
   id?: string
@@ -12,14 +13,16 @@ type Product = {
   updatedAt?: number
 }
 
-const STORE_ID = 'demo-store' // temporary; we’ll replace with real store selection later
-
 export default function Products() {
+  const user = auth.currentUser
+  const STORE_ID = useMemo(() => user?.uid || null, [user?.uid]) // per-account store for now
+
   const [items, setItems] = useState<Product[]>([])
   const [name, setName] = useState('')
-  const [price, setPrice] = useState<number | ''>('')
+  const [price, setPrice] = useState<string>('')
 
   useEffect(() => {
+    if (!STORE_ID) return
     const q = query(
       collection(db, 'products'),
       where('storeId', '==', STORE_ID),
@@ -30,11 +33,11 @@ export default function Products() {
       setItems(rows)
     })
     return () => unsub()
-  }, [])
+  }, [STORE_ID])
 
   async function addProduct(e: React.FormEvent) {
     e.preventDefault()
-    if (!name || price === '') return
+    if (!STORE_ID || !name || price === '') return
     await addDoc(collection(db, 'products'), {
       storeId: STORE_ID,
       name,
@@ -45,13 +48,18 @@ export default function Products() {
     setPrice('')
   }
 
+  if (!STORE_ID) {
+    return <div style={{maxWidth:720, margin:'24px auto'}}>Loading…</div>
+  }
+
   return (
     <div style={{maxWidth:720, margin:'24px auto', fontFamily:'Inter, system-ui, Arial'}}>
       <h2 style={{color:'#4338CA'}}>Products</h2>
+
       <form onSubmit={addProduct} style={{display:'grid', gridTemplateColumns:'2fr 1fr auto', gap:8, marginTop:12}}>
         <input placeholder="Name" value={name} onChange={e=>setName(e.target.value)} />
         <input placeholder="Price (GHS)" type="number" min={0} step="0.01"
-               value={price} onChange={e=>setPrice(e.target.value === '' ? '' : Number(e.target.value))} />
+               value={price} onChange={e=>setPrice(e.target.value)} />
         <button type="submit" style={{background:'#4338CA', color:'#fff', border:0, borderRadius:8, padding:'8px 12px'}}>Add</button>
       </form>
 
