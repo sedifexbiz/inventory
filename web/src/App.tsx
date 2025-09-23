@@ -1,5 +1,10 @@
 import React, { useEffect, useState } from 'react'
-import { onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from 'firebase/auth'
+import {
+  onAuthStateChanged,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signOut
+} from 'firebase/auth'
 import { auth } from './firebase'
 import './pwa'
 
@@ -66,8 +71,19 @@ export default function App() {
     <div style={{maxWidth:720, margin:'40px auto', fontFamily:'Inter, system-ui, Arial'}}>
       <h1 style={{color:'#4338CA'}}>Sedifex</h1>
       <p>Logged in as <strong>{user.email}</strong></p>
-      <button onClick={() => signOut(auth)}
-              style={{marginTop:12, padding:'8px 12px', borderRadius:8, border:'1px solid #ddd'}}>Sign out</button>
+
+      {/* NEW: link to Products page */}
+      <a href="/products" style={{display:'inline-block', marginTop:12}}>
+        Go to Products →
+      </a>
+
+      <button
+        onClick={() => signOut(auth)}
+        style={{display:'block', marginTop:12, padding:'8px 12px', borderRadius:8, border:'1px solid #ddd'}}
+      >
+        Sign out
+      </button>
+
       <p style={{marginTop:24}}>Next: Products & Sell screen.</p>
     </div>
   )
