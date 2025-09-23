@@ -1,5 +1,5 @@
 {
-  "name": "Sedifex \u2014 Inventory & POS",
+  "name": "Sedifex — Inventory & POS",
   "short_name": "Sedifex",
   "description": "Sell faster. Count smarter. Offline-first inventory & POS for shops.",
   "start_url": "/?source=pwa",
@@ -9,21 +9,8 @@
   "lang": "en",
   "scope": "/",
   "icons": [
-    {
-      "src": "/icons/192.png",
-      "sizes": "192x192",
-      "type": "image/png"
-    },
-    {
-      "src": "/icons/512.png",
-      "sizes": "512x512",
-      "type": "image/png"
-    },
-    {
-      "src": "/icons/maskable-512.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "maskable any"
-    }
+    { "src": "/icons/192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable any" }
   ]
 }
