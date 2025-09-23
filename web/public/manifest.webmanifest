@@ -1,0 +1,29 @@
+{
+  "name": "Sedifex \u2014 Inventory & POS",
+  "short_name": "Sedifex",
+  "description": "Sell faster. Count smarter. Offline-first inventory & POS for shops.",
+  "start_url": "/?source=pwa",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#4338CA",
+  "lang": "en",
+  "scope": "/",
+  "icons": [
+    {
+      "src": "/icons/192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable any"
+    }
+  ]
+}

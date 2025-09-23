@@ -1,0 +1,54 @@
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function inStore(storeId) {
+      return request.auth != null
+             && storeId in request.auth.token.stores;
+    }
+
+    function hasRole(storeId, allowed) {
+      return inStore(storeId)
+             && request.auth.token.roleByStore[storeId] in allowed;
+    }
+
+    match /products/{id} {
+      allow read: if inStore(resource.data.storeId);
+      allow create, update: if hasRole(request.resource.data.storeId, ['owner','manager']);
+      allow delete: if hasRole(resource.data.storeId, ['owner']);
+    }
+
+    match /ledger/{id} {
+      allow read: if inStore(resource.data.storeId);
+      allow write: if false; // write via Cloud Function only
+    }
+
+    match /sales/{id} {
+      allow read: if inStore(resource.data.storeId);
+      allow create: if hasRole(request.resource.data.storeId, ['owner','manager','cashier']);
+      allow update, delete: if hasRole(resource.data.storeId, ['owner','manager']);
+    }
+
+    match /saleItems/{id} {
+      allow read: if inStore(resource.data.storeId);
+      allow write: if false; // write via Cloud Function only
+    }
+
+    match /expenses/{id} {
+      allow read: if inStore(resource.data.storeId);
+      allow create: if hasRole(request.resource.data.storeId, ['owner','manager','cashier']);
+      allow update, delete: if hasRole(resource.data.storeId, ['owner','manager']);
+    }
+
+    match /cashSessions/{id} {
+      allow read: if inStore(resource.data.storeId);
+      allow write: if hasRole(request.resource.data.storeId, ['owner','manager','cashier']);
+    }
+
+    match /invites/{id} {
+      allow read, create: if hasRole(request.resource.data.storeId, ['owner','manager']);
+      allow update, delete: if hasRole(resource.data.storeId, ['owner','manager']);
+    }
+  }
+}
