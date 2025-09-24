@@ -3,14 +3,14 @@ import {
   collection, addDoc, onSnapshot, query, where, orderBy,
   doc, updateDoc, deleteDoc
 } from 'firebase/firestore'
-import { db } from '../firebase'
-import { auth } from '../firebase'
+import { db, auth } from '../firebase'
 
 type Product = {
   id?: string
   storeId: string
   name: string
   price: number
+  stockCount?: number
   barcode?: string
   minStock?: number
   updatedAt?: number
@@ -26,6 +26,7 @@ export default function Products() {
   const [editing, setEditing] = useState<string | null>(null)
   const [editName, setEditName] = useState('')
   const [editPrice, setEditPrice] = useState<string>('')
+  const [editStock, setEditStock] = useState<string>('')
 
   useEffect(() => {
     if (!STORE_ID) return
@@ -48,6 +49,7 @@ export default function Products() {
       storeId: STORE_ID,
       name,
       price: Number(price),
+      stockCount: 0,
       updatedAt: Date.now()
     })
     setName(''); setPrice('')
@@ -57,12 +59,14 @@ export default function Products() {
     setEditing(p.id!)
     setEditName(p.name)
     setEditPrice(String(p.price))
+    setEditStock(String(p.stockCount ?? 0))
   }
 
   async function saveEdit(id: string) {
     await updateDoc(doc(db, 'products', id), {
       name: editName,
       price: Number(editPrice),
+      stockCount: Number(editStock),
       updatedAt: Date.now()
     })
     setEditing(null)
@@ -75,7 +79,7 @@ export default function Products() {
   if (!STORE_ID) return <div>Loading…</div>
 
   return (
-    <div style={{fontFamily:'Inter, system-ui, Arial'}}>
+    <div>
       <h2 style={{color:'#4338CA'}}>Products</h2>
 
       <form onSubmit={addProduct} style={{display:'grid', gridTemplateColumns:'2fr 1fr auto', gap:8, marginTop:12}}>
@@ -90,6 +94,7 @@ export default function Products() {
           <tr>
             <th align="left">Name</th>
             <th align="right">Price (GHS)</th>
+            <th align="right">Stock</th>
             <th align="right">Actions</th>
           </tr>
         </thead>
@@ -106,6 +111,12 @@ export default function Products() {
                   ? <input style={{textAlign:'right'}} type="number" min={0} step="0.01"
                            value={editPrice} onChange={e=>setEditPrice(e.target.value)} />
                   : p.price?.toFixed(2)}
+              </td>
+              <td align="right">
+                {editing===p.id
+                  ? <input style={{textAlign:'right'}} type="number" min={0} step="1"
+                           value={editStock} onChange={e=>setEditStock(e.target.value)} />
+                  : (p.stockCount ?? 0)}
               </td>
               <td align="right" style={{whiteSpace:'nowrap'}}>
                 {editing===p.id ? (
