@@ -1,7 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { collection, addDoc, onSnapshot, query, where, orderBy } from 'firebase/firestore'
+import {
+  collection, addDoc, onSnapshot, query, where, orderBy,
+  doc, updateDoc, deleteDoc
+} from 'firebase/firestore'
 import { db } from '../firebase'
-import { auth } from '../firebase' // NEW
+import { auth } from '../firebase'
 
 type Product = {
   id?: string
@@ -15,11 +18,14 @@ type Product = {
 
 export default function Products() {
   const user = auth.currentUser
-  const STORE_ID = useMemo(() => user?.uid || null, [user?.uid]) // per-account store for now
+  const STORE_ID = useMemo(() => user?.uid || null, [user?.uid])
 
   const [items, setItems] = useState<Product[]>([])
   const [name, setName] = useState('')
   const [price, setPrice] = useState<string>('')
+  const [editing, setEditing] = useState<string | null>(null)
+  const [editName, setEditName] = useState('')
+  const [editPrice, setEditPrice] = useState<string>('')
 
   useEffect(() => {
     if (!STORE_ID) return
@@ -44,16 +50,32 @@ export default function Products() {
       price: Number(price),
       updatedAt: Date.now()
     })
-    setName('')
-    setPrice('')
+    setName(''); setPrice('')
   }
 
-  if (!STORE_ID) {
-    return <div style={{maxWidth:720, margin:'24px auto'}}>Loading…</div>
+  function beginEdit(p: Product) {
+    setEditing(p.id!)
+    setEditName(p.name)
+    setEditPrice(String(p.price))
   }
+
+  async function saveEdit(id: string) {
+    await updateDoc(doc(db, 'products', id), {
+      name: editName,
+      price: Number(editPrice),
+      updatedAt: Date.now()
+    })
+    setEditing(null)
+  }
+
+  async function remove(id: string) {
+    await deleteDoc(doc(db, 'products', id))
+  }
+
+  if (!STORE_ID) return <div>Loading…</div>
 
   return (
-    <div style={{maxWidth:720, margin:'24px auto', fontFamily:'Inter, system-ui, Arial'}}>
+    <div style={{fontFamily:'Inter, system-ui, Arial'}}>
       <h2 style={{color:'#4338CA'}}>Products</h2>
 
       <form onSubmit={addProduct} style={{display:'grid', gridTemplateColumns:'2fr 1fr auto', gap:8, marginTop:12}}>
@@ -64,12 +86,40 @@ export default function Products() {
       </form>
 
       <table style={{width:'100%', marginTop:16, borderCollapse:'collapse'}}>
-        <thead><tr><th align="left">Name</th><th align="right">Price (GHS)</th></tr></thead>
+        <thead>
+          <tr>
+            <th align="left">Name</th>
+            <th align="right">Price (GHS)</th>
+            <th align="right">Actions</th>
+          </tr>
+        </thead>
         <tbody>
           {items.map(p=>(
             <tr key={p.id} style={{borderTop:'1px solid #eee'}}>
-              <td>{p.name}</td>
-              <td align="right">{p.price?.toFixed(2)}</td>
+              <td>
+                {editing===p.id
+                  ? <input value={editName} onChange={e=>setEditName(e.target.value)} />
+                  : p.name}
+              </td>
+              <td align="right">
+                {editing===p.id
+                  ? <input style={{textAlign:'right'}} type="number" min={0} step="0.01"
+                           value={editPrice} onChange={e=>setEditPrice(e.target.value)} />
+                  : p.price?.toFixed(2)}
+              </td>
+              <td align="right" style={{whiteSpace:'nowrap'}}>
+                {editing===p.id ? (
+                  <>
+                    <button onClick={()=>saveEdit(p.id!)} style={{marginRight:8}}>Save</button>
+                    <button onClick={()=>setEditing(null)}>Cancel</button>
+                  </>
+                ) : (
+                  <>
+                    <button onClick={()=>beginEdit(p)} style={{marginRight:8}}>Edit</button>
+                    <button onClick={()=>remove(p.id!)}>Delete</button>
+                  </>
+                )}
+              </td>
             </tr>
           ))}
         </tbody>
