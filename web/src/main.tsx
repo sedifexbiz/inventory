@@ -13,7 +13,7 @@ import Settings from './pages/Settings'
 const router = createHashRouter([
   {
     path: '/',
-    element: <App />, // handles auth; shows login or the Shell
+    element: <App />,
     children: [
       { index: true, element: <Shell><Dashboard /></Shell> },
       { path: 'products',  element: <Shell><Products /></Shell> },
