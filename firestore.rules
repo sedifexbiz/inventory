@@ -54,7 +54,8 @@ service cloud.firestore {
           && !exists(/databases/$(database)/documents/stores/$(request.auth.uid)/members/$(request.auth.uid));
 
         // Read: anyone in the store can read members; always allow a user to read their own membership
-        allow read: if inStore(storeId) || (isAuthed() && memberId == request.auth.uid);
+        allow read: if inStore(storeId)
+          || (isAuthed() && (memberId == request.auth.uid || resource.data.uid == request.auth.uid));
 
         // Updates:
         // - Owners can manage roles (add/remove/modify any member)
