@@ -18,10 +18,10 @@ import {
 } from './controllers/sessionController'
 import { AuthUserContext } from './hooks/useAuthUser'
 import { getOnboardingStatus, setOnboardingStatus } from './utils/onboarding'
-import Gate from './pages/Gate' // self-serve bootstrap gate
-import DebugButtons from './DebugButtons'   // ← debug helper buttons (DEV-only)
+import Gate from './pages/Gate' // ← new: self-serve bootstrap gate
 
 type AuthMode = 'login' | 'signup'
+
 type StatusTone = 'idle' | 'loading' | 'success' | 'error'
 
 interface StatusState {
@@ -30,6 +30,7 @@ interface StatusState {
 }
 
 type QueueRequestType = 'sale' | 'receipt'
+
 function isQueueRequestType(value: unknown): value is QueueRequestType {
   return value === 'sale' || value === 'receipt'
 }
@@ -45,6 +46,7 @@ interface PasswordStrength {
   hasNumber: boolean
   hasSymbol: boolean
 }
+
 function evaluatePasswordStrength(password: string): PasswordStrength {
   return {
     isLongEnough: password.length >= PASSWORD_MIN_LENGTH,
@@ -56,9 +58,15 @@ function evaluatePasswordStrength(password: string): PasswordStrength {
 }
 
 function getLoginValidationError(email: string, password: string): string | null {
-  if (!email) return 'Enter your email.'
-  if (!EMAIL_PATTERN.test(email)) return 'Enter a valid email address.'
-  if (!password) return 'Enter your password.'
+  if (!email) {
+    return 'Enter your email.'
+  }
+  if (!EMAIL_PATTERN.test(email)) {
+    return 'Enter a valid email address.'
+  }
+  if (!password) {
+    return 'Enter your password.'
+  }
   return null
 }
 
@@ -67,40 +75,80 @@ function getSignupValidationError(
   password: string,
   confirmPassword: string,
 ): string | null {
-  if (!email) return 'Enter your email.'
-  if (!EMAIL_PATTERN.test(email)) return 'Enter a valid email address.'
-  if (!password) return 'Create a password to continue.'
-  const { isLongEnough, hasUppercase, hasLowercase, hasNumber, hasSymbol } = evaluatePasswordStrength(password)
-  if (!isLongEnough) return `Password must be at least ${PASSWORD_MIN_LENGTH} characters.`
-  if (!hasUppercase) return 'Password must include an uppercase letter.'
-  if (!hasLowercase) return 'Password must include a lowercase letter.'
-  if (!hasNumber) return 'Password must include a number.'
-  if (!hasSymbol) return 'Password must include a symbol.'
-  if (!confirmPassword) return 'Confirm your password.'
-  if (password !== confirmPassword) return 'Passwords do not match.'
+  if (!email) {
+    return 'Enter your email.'
+  }
+  if (!EMAIL_PATTERN.test(email)) {
+    return 'Enter a valid email address.'
+  }
+  if (!password) {
+    return 'Create a password to continue.'
+  }
+
+  const { isLongEnough, hasUppercase, hasLowercase, hasNumber, hasSymbol } =
+    evaluatePasswordStrength(password)
+
+  if (!isLongEnough) {
+    return `Password must be at least ${PASSWORD_MIN_LENGTH} characters.`
+  }
+  if (!hasUppercase) {
+    return 'Password must include an uppercase letter.'
+  }
+  if (!hasLowercase) {
+    return 'Password must include a lowercase letter.'
+  }
+  if (!hasNumber) {
+    return 'Password must include a number.'
+  }
+  if (!hasSymbol) {
+    return 'Password must include a symbol.'
+  }
+  if (!confirmPassword) {
+    return 'Confirm your password.'
+  }
+  if (password !== confirmPassword) {
+    return 'Passwords do not match.'
+  }
+
   return null
 }
 
-type QueueCompletedMessage = { type: 'QUEUE_REQUEST_COMPLETED'; requestType?: unknown }
-type QueueFailedMessage = { type: 'QUEUE_REQUEST_FAILED'; requestType?: unknown; error?: unknown }
+type QueueCompletedMessage = {
+  type: 'QUEUE_REQUEST_COMPLETED'
+  requestType?: unknown
+}
+
+type QueueFailedMessage = {
+  type: 'QUEUE_REQUEST_FAILED'
+  requestType?: unknown
+  error?: unknown
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
+
 function isQueueCompletedMessage(value: unknown): value is QueueCompletedMessage {
   return isRecord(value) && (value as any).type === 'QUEUE_REQUEST_COMPLETED'
 }
+
 function isQueueFailedMessage(value: unknown): value is QueueFailedMessage {
   return isRecord(value) && (value as any).type === 'QUEUE_REQUEST_FAILED'
 }
+
 function getQueueRequestLabel(requestType: unknown): string {
-  if (!isQueueRequestType(requestType)) return 'request'
+  if (!isQueueRequestType(requestType)) {
+    return 'request'
+  }
   return requestType === 'receipt' ? 'stock receipt' : 'sale'
 }
+
 function normalizeQueueError(value: unknown): string | null {
   if (typeof value === 'string') {
     const trimmed = value.trim()
-    if (trimmed.length > 0) return trimmed
+    if (trimmed.length > 0) {
+      return trimmed
+    }
   }
   return null
 }
@@ -137,13 +185,16 @@ export default function App() {
     doesPasswordMeetAllChecks &&
     hasConfirmedPassword &&
     normalizedPassword === normalizedConfirmPassword
-  const isLoginFormValid = EMAIL_PATTERN.test(normalizedEmail) && normalizedPassword.length > 0
+  const isLoginFormValid =
+    EMAIL_PATTERN.test(normalizedEmail) && normalizedPassword.length > 0
   const isSubmitDisabled = isLoading || (mode === 'login' ? !isLoginFormValid : !isSignupFormValid)
 
   useEffect(() => {
+    // Ensure persistence is configured before we react to auth changes
     configureAuthPersistence(auth).catch(error => {
       console.warn('[auth] Unable to configure persistence', error)
     })
+
     const unsubscribe = onAuthStateChanged(auth, nextUser => {
       setUser(nextUser)
       setIsAuthReady(true)
@@ -167,19 +218,23 @@ export default function App() {
   }, [location.pathname, navigate, user])
 
   useEffect(() => {
+    // Small UX touch: show the current auth mode in the tab title
     document.title = mode === 'login' ? 'Sedifex — Log in' : 'Sedifex — Sign up'
   }, [mode])
 
   useEffect(() => {
     if (!('serviceWorker' in navigator)) return
+
     const handleMessage = (event: MessageEvent) => {
       const data = event.data
       if (!data || typeof data !== 'object') return
+
       if (isQueueCompletedMessage(data)) {
         const label = getQueueRequestLabel(data.requestType)
         publish({ message: `Queued ${label} synced successfully.`, tone: 'success' })
         return
       }
+
       if (isQueueFailedMessage(data)) {
         const label = getQueueRequestLabel(data.requestType)
         const detail = normalizeQueueError(data.error)
@@ -192,6 +247,7 @@ export default function App() {
         })
       }
     }
+
     navigator.serviceWorker.addEventListener('message', handleMessage)
     return () => navigator.serviceWorker.removeEventListener('message', handleMessage)
   }, [publish])
@@ -223,17 +279,25 @@ export default function App() {
 
     try {
       if (mode === 'login') {
-        const { user: nextUser } = await signInWithEmailAndPassword(auth, sanitizedEmail, sanitizedPassword)
+        const { user: nextUser } = await signInWithEmailAndPassword(
+          auth,
+          sanitizedEmail,
+          sanitizedPassword,
+        )
         await persistSession(nextUser)
       } else {
-        const { user: nextUser } = await createUserWithEmailAndPassword(auth, sanitizedEmail, sanitizedPassword)
+        const { user: nextUser } = await createUserWithEmailAndPassword(
+          auth,
+          sanitizedEmail,
+          sanitizedPassword,
+        )
         await persistSession(nextUser)
         try {
           await nextUser.getIdToken(true)
         } catch (error) {
           console.warn('[auth] Unable to refresh ID token after signup', error)
         }
-        // Gate handles self-serve creation.
+        // No initializeStoreAccess here; Gate handles self-serve creation.
         setOnboardingStatus(nextUser.uid, 'pending')
       }
 
@@ -261,13 +325,12 @@ export default function App() {
     setConfirmPassword('')
   }
 
+  // Inline minHeight is just a safety net; CSS already uses dvh/svh.
   const appStyle: React.CSSProperties = { minHeight: '100dvh' }
-  const showDebug = typeof import.meta !== 'undefined' && (import.meta as any).env?.DEV
 
   if (!isAuthReady) {
     return (
       <main className="app" style={appStyle}>
-        {showDebug && <DebugButtons />}
         <div className="app__card">
           <p className="form__hint">Checking your session…</p>
         </div>
@@ -278,8 +341,6 @@ export default function App() {
   if (!user) {
     return (
       <main className="app" style={appStyle}>
-        {showDebug && <DebugButtons />}
-
         <div className="app__layout">
           <div className="app__card">
             <div className="app__brand">
@@ -344,7 +405,6 @@ export default function App() {
                   aria-invalid={email.length > 0 && !EMAIL_PATTERN.test(normalizedEmail)}
                 />
               </div>
-
               <div className="form__field">
                 <label htmlFor="password">Password</label>
                 <input
@@ -358,7 +418,9 @@ export default function App() {
                   required
                   disabled={isLoading}
                   aria-invalid={
-                    mode === 'signup' && normalizedPassword.length > 0 && !doesPasswordMeetAllChecks
+                    mode === 'signup' &&
+                    normalizedPassword.length > 0 &&
+                    !doesPasswordMeetAllChecks
                   }
                   aria-describedby={mode === 'signup' ? 'password-guidelines' : undefined}
                 />
@@ -375,7 +437,6 @@ export default function App() {
                   </ul>
                 )}
               </div>
-
               {mode === 'signup' && (
                 <div className="form__field">
                   <label htmlFor="confirm-password">Confirm password</label>
@@ -400,7 +461,6 @@ export default function App() {
                   </p>
                 </div>
               )}
-
               <button className="primary-button" type="submit" disabled={isSubmitDisabled}>
                 {isLoading
                   ? mode === 'login'
@@ -434,9 +494,17 @@ export default function App() {
               <span className="app__visual-pill">Operations snapshot</span>
               <h2>Stay synced from the floor to finance</h2>
               <p>
-                <Link className="app__visual-link" to="/sell">Live sales</Link>,{' '}
-                <Link className="app__visual-link" to="/products">inventory alerts</Link>, and{' '}
-                <Link className="app__visual-link" to="/close-day">smart counts</Link>{' '}
+                <Link className="app__visual-link" to="/sell">
+                  Live sales
+                </Link>
+                ,{' '}
+                <Link className="app__visual-link" to="/products">
+                  inventory alerts
+                </Link>
+                , and{' '}
+                <Link className="app__visual-link" to="/close-day">
+                  smart counts
+                </Link>{' '}
                 help your whole team stay aligned from any device.
               </p>
             </div>
@@ -501,10 +569,8 @@ export default function App() {
     )
   }
 
-  // Authenticated
   return (
     <AuthUserContext.Provider value={user}>
-      {showDebug && <DebugButtons />}
       {/* Gate shows “Create my store” when user has no memberships */}
       <Gate>
         <Outlet />
@@ -514,6 +580,7 @@ export default function App() {
 }
 
 function getErrorMessage(error: unknown): string {
+  // Friendlier Firebase Auth errors
   if (error instanceof FirebaseError) {
     const code = error.code || ''
     switch (code) {
@@ -533,7 +600,14 @@ function getErrorMessage(error: unknown): string {
         return (error as any).message || 'Something went wrong. Please try again.'
     }
   }
-  if (error instanceof Error) return error.message || 'Something went wrong. Please try again.'
-  if (typeof error === 'string') return error
+
+  if (error instanceof Error) {
+    return error.message || 'Something went wrong. Please try again.'
+  }
+
+  if (typeof error === 'string') {
+    return error
+  }
+
   return 'Something went wrong. Please try again.'
 }
