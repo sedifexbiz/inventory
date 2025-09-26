@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { collectionGroup, getDocs, query, where } from 'firebase/firestore';
 import { db } from '../firebase';           // your initialized Firestore
-import { useAuth } from './useAuth';        // your auth hook that exposes { user }
+import { useAuthUser } from './useAuthUser';
 
 export type Membership = {
   storeId: string;
@@ -13,7 +13,7 @@ export type Membership = {
 };
 
 export function useMemberships() {
-  const { user } = useAuth();
+  const user = useAuthUser();
   const [loading, setLoading] = useState(true);
   const [memberships, setMemberships] = useState<Membership[]>([]);
   const [error, setError] = useState<unknown>(null);
