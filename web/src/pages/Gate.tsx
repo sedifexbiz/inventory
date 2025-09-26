@@ -1,9 +1,9 @@
 // web/src/pages/Gate.tsx
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useMemberships } from '../hooks/useMemberships';
 import { createMyFirstStore } from '../controllers/storeController';
 
-export default function Gate({ children }: { children: React.ReactNode }) {
+export default function Gate({ children }: { children: ReactNode }) {
   const { loading, memberships, error } = useMemberships();
   const [busy, setBusy] = useState(false);
   const [errMsg, setErrMsg] = useState<string | null>(null);
