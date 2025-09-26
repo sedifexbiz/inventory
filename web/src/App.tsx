@@ -19,6 +19,17 @@ import {
 import { AuthUserContext } from './hooks/useAuthUser'
 import { getOnboardingStatus, setOnboardingStatus } from './utils/onboarding'
 import Gate from './pages/Gate' // ← new: self-serve bootstrap gate
+import DebugButtons from './DebugButtons'
+
+export default function App() {
+  return (
+    <>
+      <DebugButtons />
+      {/* the rest of your app */}
+    </>
+  );
+}
+
 
 type AuthMode = 'login' | 'signup'
 
