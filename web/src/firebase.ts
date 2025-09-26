@@ -3,7 +3,7 @@ import { getAuth, RecaptchaVerifier } from 'firebase/auth'
 import {
   initializeFirestore,
   enableIndexedDbPersistence,
-  // ⬇ added for console tests
+  // added:
   doc, getDoc, setDoc, serverTimestamp,
 } from 'firebase/firestore'
 import { getFunctions } from 'firebase/functions'
@@ -18,13 +18,8 @@ type FirebaseEnvKey =
 
 function requireFirebaseEnv(key: FirebaseEnvKey): string {
   const value = import.meta.env[key]
-  if (typeof value === 'string' && value.trim() !== '') {
-    return value
-  }
-  throw new Error(
-    `[firebase] Missing required environment variable "${key}". ` +
-      'Ensure the value is defined in your deployment configuration.'
-  )
+  if (typeof value === 'string' && value.trim() !== '') return value
+  throw new Error(`[firebase] Missing required environment variable "${key}".`)
 }
 
 const firebaseConfig = {
@@ -48,21 +43,15 @@ export function setupRecaptcha(containerId = 'recaptcha-container') {
   return new RecaptchaVerifier(auth, containerId, { size: 'invisible' })
 }
 
-/** ---- Dev-only console helpers (remove later if you like) ---- */
+/** TEMP: expose helpers for console tests (remove later) */
 declare global {
   interface Window {
     auth?: ReturnType<typeof getAuth>;
     db?: ReturnType<typeof initializeFirestore>;
-    fs?: {
-      doc: typeof doc;
-      getDoc: typeof getDoc;
-      setDoc: typeof setDoc;
-      serverTimestamp: typeof serverTimestamp;
-    };
+    fs?: { doc: typeof doc; getDoc: typeof getDoc; setDoc: typeof setDoc; serverTimestamp: typeof serverTimestamp; };
   }
 }
-
-if (typeof window !== 'undefined' && import.meta.env.DEV) {
+if (typeof window !== 'undefined') {
   window.auth = auth
   window.db = db
   window.fs = { doc, getDoc, setDoc, serverTimestamp }
