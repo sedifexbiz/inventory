@@ -78,29 +78,28 @@ async function ensureDefaultStoreForUser(uid: string, email?: string | null) {
   const membershipId = `${storeId}_${uid}`
   const membershipRef = db.collection('storeUsers').doc(membershipId)
 
-  await db.runTransaction(async tx => {
+  const shouldCreateMembership = await db.runTransaction(async tx => {
     const membershipSnap = await tx.get(membershipRef)
     if (membershipSnap.exists) {
-      return
+      return false
     }
+
+    const timestamp = admin.firestore.FieldValue.serverTimestamp()
 
     tx.set(storeRef, {
       storeId,
       ownerId: uid,
       ownerEmail: email ?? null,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: timestamp,
+      updatedAt: timestamp,
     })
 
-    tx.set(membershipRef, {
-      storeId,
-      uid,
-      role: 'owner',
-      email: email ?? null,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    })
+    return true
   })
+
+  if (shouldCreateMembership) {
+    await upsertStoreMembership(storeId, uid, email ?? null, 'owner', null)
+  }
 }
 
 async function refreshUserClaims(uid: string, email?: string | null) {
@@ -204,26 +203,45 @@ async function ensureAuthUser(email: string, password?: string) {
 async function upsertStoreMembership(
   storeId: string,
   uid: string,
-  email: string,
+  email: string | null,
   role: string,
   invitedBy: string | null,
 ) {
   const membershipRef = db.collection('storeUsers').doc(`${storeId}_${uid}`)
-  const snapshot = await membershipRef.get()
+  const storeMemberRef = db.collection('stores').doc(storeId).collection('members').doc(uid)
+
+  const [membershipSnap, storeMemberSnap] = await Promise.all([
+    membershipRef.get(),
+    storeMemberRef.get(),
+  ])
+
   const timestamp = admin.firestore.FieldValue.serverTimestamp()
 
-  const data = {
+  const baseData = {
     storeId,
     uid,
-    email,
+    email: email ?? null,
     role,
     invitedBy,
     updatedAt: timestamp,
-    ...(snapshot.exists ? {} : { createdAt: timestamp }),
   }
 
-  await membershipRef.set(data, { merge: true })
-  return data
+  const membershipData = {
+    ...baseData,
+    ...(membershipSnap.exists ? {} : { createdAt: timestamp }),
+  }
+
+  const storeMemberData = {
+    ...baseData,
+    ...(storeMemberSnap.exists ? {} : { createdAt: timestamp }),
+  }
+
+  await Promise.all([
+    membershipRef.set(membershipData, { merge: true }),
+    storeMemberRef.set(storeMemberData, { merge: true }),
+  ])
+
+  return membershipData
 }
 
 export const manageStaffAccount = functions.https.onCall(async (data, context) => {
