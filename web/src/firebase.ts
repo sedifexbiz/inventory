@@ -1,6 +1,11 @@
 import { initializeApp } from 'firebase/app'
 import { getAuth, RecaptchaVerifier } from 'firebase/auth'
-import { initializeFirestore, enableIndexedDbPersistence } from 'firebase/firestore'
+import {
+  initializeFirestore,
+  enableIndexedDbPersistence,
+  // ⬇ added for console tests
+  doc, getDoc, setDoc, serverTimestamp,
+} from 'firebase/firestore'
 import { getFunctions } from 'firebase/functions'
 import { getStorage } from 'firebase/storage'
 
@@ -16,7 +21,6 @@ function requireFirebaseEnv(key: FirebaseEnvKey): string {
   if (typeof value === 'string' && value.trim() !== '') {
     return value
   }
-
   throw new Error(
     `[firebase] Missing required environment variable "${key}". ` +
       'Ensure the value is defined in your deployment configuration.'
@@ -35,11 +39,31 @@ export const app = initializeApp(firebaseConfig)
 export const auth = getAuth(app)
 
 export const db = initializeFirestore(app, { ignoreUndefinedProperties: true })
-enableIndexedDbPersistence(db).catch(() => {/* multi-tab fallback handled */})
+enableIndexedDbPersistence(db).catch(() => { /* multi-tab fallback handled */ })
 
 export const storage = getStorage(app)
 export const functions = getFunctions(app)
 
 export function setupRecaptcha(containerId = 'recaptcha-container') {
   return new RecaptchaVerifier(auth, containerId, { size: 'invisible' })
+}
+
+/** ---- Dev-only console helpers (remove later if you like) ---- */
+declare global {
+  interface Window {
+    auth?: ReturnType<typeof getAuth>;
+    db?: ReturnType<typeof initializeFirestore>;
+    fs?: {
+      doc: typeof doc;
+      getDoc: typeof getDoc;
+      setDoc: typeof setDoc;
+      serverTimestamp: typeof serverTimestamp;
+    };
+  }
+}
+
+if (typeof window !== 'undefined' && import.meta.env.DEV) {
+  window.auth = auth
+  window.db = db
+  window.fs = { doc, getDoc, setDoc, serverTimestamp }
 }
