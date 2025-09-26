@@ -18,6 +18,7 @@ import {
 } from './controllers/sessionController'
 import { AuthUserContext } from './hooks/useAuthUser'
 import { getOnboardingStatus, setOnboardingStatus } from './utils/onboarding'
+import { createMyFirstStore } from './controllers/storeController'
 import Gate from './pages/Gate' // ← new: self-serve bootstrap gate
 
 type AuthMode = 'login' | 'signup'
@@ -291,6 +292,7 @@ export default function App() {
           sanitizedEmail,
           sanitizedPassword,
         )
+        await createMyFirstStore()
         await persistSession(nextUser)
         try {
           await nextUser.getIdToken(true)
