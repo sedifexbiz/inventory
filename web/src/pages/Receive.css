@@ -1,0 +1,43 @@
+.receive-page__card {
+  max-width: 720px;
+}
+
+.receive-page__form {
+  display: grid;
+  gap: 18px;
+}
+
+@media (min-width: 720px) {
+  .receive-page__form {
+    grid-template-columns: 2fr 1fr auto;
+    align-items: end;
+  }
+
+  .receive-page__actions {
+    justify-self: end;
+  }
+}
+
+.receive-page__actions {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.receive-page__message {
+  margin: 0;
+  font-size: 14px;
+}
+
+.receive-page__message--success {
+  color: #047857;
+}
+
+.receive-page__message--error {
+  color: #b91c1c;
+}
+
+@media (max-width: 640px) {
+  .receive-page__form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
