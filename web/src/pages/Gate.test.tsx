@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import { FirebaseError } from 'firebase/app';
 
 import Gate from './Gate';
 
@@ -79,5 +80,48 @@ describe('Gate', () => {
     });
 
     expect(screen.queryByText(/temporary failure/i)).not.toBeInTheDocument();
+  });
+
+  it('shows bootstrap CTA when membership load is permission denied', async () => {
+    mockUseAuthUser.mockReturnValue({ uid: 'user-1' });
+    getDocsMock.mockRejectedValueOnce(
+      new FirebaseError('permission-denied', 'Missing or insufficient permissions.')
+    );
+
+    render(<Gate />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/create my store/i)).toBeInTheDocument();
+    });
+
+    expect(screen.getByText(/missing or insufficient permissions/i)).toBeInTheDocument();
+  });
+
+  it('shows bootstrap CTA when membership load fails offline', async () => {
+    mockUseAuthUser.mockReturnValue({ uid: 'user-1' });
+    getDocsMock.mockRejectedValueOnce(
+      new FirebaseError('unavailable', 'Client is offline, please retry.')
+    );
+
+    render(<Gate />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /create my store/i })).toBeInTheDocument();
+    });
+
+    expect(screen.getByText(/client is offline/i)).toBeInTheDocument();
+  });
+
+  it('shows CTA with irrecoverable error message', async () => {
+    mockUseAuthUser.mockReturnValue({ uid: 'user-1' });
+    getDocsMock.mockRejectedValueOnce(new Error('unexpected failure'));
+
+    render(<Gate />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /create my store/i })).toBeInTheDocument();
+    });
+
+    expect(screen.getByText(/unexpected failure/i)).toBeInTheDocument();
   });
 });

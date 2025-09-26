@@ -17,8 +17,6 @@ import { Link } from 'react-router-dom'
 import { db } from '../firebase'
 import { useActiveStore } from '../hooks/useActiveStore'
 import './Customers.css'
-import { AccessDenied } from '../components/AccessDenied'
-import { canAccessFeature } from '../utils/permissions'
 import {
   CUSTOMER_CACHE_LIMIT,
   SALES_CACHE_LIMIT,
@@ -143,7 +141,7 @@ function buildCsvValue(value: string): string {
 }
 
 export default function Customers() {
-  const { storeId: STORE_ID, role, isLoading: storeLoading, error: storeError } = useActiveStore()
+  const { storeId: STORE_ID, isLoading: storeLoading, error: storeError } = useActiveStore()
 
   const [customers, setCustomers] = useState<Customer[]>([])
   const [name, setName] = useState('')
@@ -164,8 +162,6 @@ export default function Customers() {
   const [searchTerm, setSearchTerm] = useState('')
   const [tagFilter, setTagFilter] = useState<string | null>(null)
   const [quickFilter, setQuickFilter] = useState<'all' | 'recent' | 'noPurchases' | 'highValue' | 'untagged'>('all')
-  const hasAccess = canAccessFeature(role, 'customers')
-
   useEffect(() => {
     return () => {
       if (messageTimeoutRef.current) {
@@ -187,7 +183,7 @@ export default function Customers() {
   }
 
   useEffect(() => {
-    if (!STORE_ID || !hasAccess) return
+    if (!STORE_ID) return
     let cancelled = false
 
     loadCachedCustomers<Customer>(STORE_ID)
@@ -231,7 +227,7 @@ export default function Customers() {
       cancelled = true
       unsubscribe()
     }
-  }, [STORE_ID, hasAccess])
+  }, [STORE_ID])
 
   function normalizeSaleDate(value: unknown): Date | null {
     if (!value) return null
@@ -323,7 +319,7 @@ export default function Customers() {
   }
 
   useEffect(() => {
-    if (!STORE_ID || !hasAccess) return
+    if (!STORE_ID) return
     let cancelled = false
 
     loadCachedSales<CachedSaleRecord>(STORE_ID)
@@ -355,7 +351,7 @@ export default function Customers() {
       cancelled = true
       unsubscribe()
     }
-  }, [STORE_ID, hasAccess])
+  }, [STORE_ID])
 
   useEffect(() => {
     if (!selectedCustomerId) return
@@ -700,10 +696,6 @@ export default function Customers() {
     { id: 'highValue', label: 'High spenders' },
     { id: 'untagged', label: 'Untagged' },
   ]
-
-  if (!storeLoading && !hasAccess) {
-    return <AccessDenied feature="customers" role={role ?? null} />
-  }
 
   if (storeLoading) {
     return <div>Loading…</div>

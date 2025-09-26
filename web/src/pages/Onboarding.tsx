@@ -1,9 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { AccessDenied } from '../components/AccessDenied'
 import { useAuthUser } from '../hooks/useAuthUser'
 import { useActiveStore } from '../hooks/useActiveStore'
-import { canAccessFeature } from '../utils/permissions'
 import { getOnboardingStatus, setOnboardingStatus, type OnboardingStatus } from '../utils/onboarding'
 import './Onboarding.css'
 
@@ -12,14 +10,13 @@ const STAFF_ACCESS_PATH = '/settings?panel=staff'
 export default function Onboarding() {
   const user = useAuthUser()
   const navigate = useNavigate()
-  const { role, isLoading: storeLoading, error: storeError, storeId } = useActiveStore()
+  const { isLoading: storeLoading, error: storeError, storeId } = useActiveStore()
   const [status, setStatus] = useState<OnboardingStatus | null>(() => getOnboardingStatus(user?.uid ?? null))
 
   useEffect(() => {
     setStatus(getOnboardingStatus(user?.uid ?? null))
   }, [user?.uid])
 
-  const hasAccess = useMemo(() => canAccessFeature(role, 'onboarding'), [role])
   const hasCompleted = status === 'completed'
 
   function handleComplete() {
@@ -37,7 +34,7 @@ export default function Onboarding() {
       <div className="page" role="status" aria-live="polite">
         <header className="page__header">
           <h1 className="page__title">Preparing your workspace…</h1>
-          <p className="page__subtitle">We&apos;re checking your permissions and store access.</p>
+          <p className="page__subtitle">We&apos;re getting your store workspace ready.</p>
         </header>
       </div>
     )
@@ -52,10 +49,6 @@ export default function Onboarding() {
         </header>
       </div>
     )
-  }
-
-  if (!hasAccess) {
-    return <AccessDenied feature="onboarding" role={role} />
   }
 
   return (

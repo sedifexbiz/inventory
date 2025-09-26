@@ -4,10 +4,8 @@ import { collection, doc, onSnapshot, orderBy, query, serverTimestamp, setDoc, w
 import { db } from '../firebase'
 import { useAuthUser } from '../hooks/useAuthUser'
 import { useActiveStore } from '../hooks/useActiveStore'
-import { AccessDenied } from '../components/AccessDenied'
 import { useToast } from '../components/ToastProvider'
 import { manageStaffAccount } from '../controllers/storeController'
-import { canAccessFeature, formatRoleLabel } from '../utils/permissions'
 import './Settings.css'
 
 type TaxRate = {
@@ -56,6 +54,19 @@ function normalizePanelParam(value: string | null): SettingsPanel {
   }
 
   return 'store'
+}
+
+function formatRoleName(role: string | null | undefined) {
+  if (!role) {
+    return 'Not assigned'
+  }
+
+  const parts = role
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+
+  return parts.length > 0 ? parts.join(' ') : 'Not assigned'
 }
 
 type StaffMember = {
@@ -157,8 +168,7 @@ function toStaffRoles(value: unknown): StaffRole[] {
 
 export default function Settings() {
   const user = useAuthUser()
-  const { storeId: STORE_ID, role, isLoading: storeLoading, error: storeError } = useActiveStore()
-  const hasAccess = canAccessFeature(role, 'settings')
+  const { storeId: STORE_ID, isLoading: storeLoading, error: storeError } = useActiveStore()
   const { publish } = useToast()
 
   const [searchParams, setSearchParams] = useSearchParams()
@@ -227,12 +237,12 @@ export default function Settings() {
   )
 
   const settingsRef = useMemo(() => {
-    if (!STORE_ID || !hasAccess) return null
+    if (!STORE_ID) return null
     return doc(db, 'storeSettings', STORE_ID)
-  }, [STORE_ID, hasAccess])
+  }, [STORE_ID])
 
   useEffect(() => {
-    if (!STORE_ID || !hasAccess) {
+    if (!STORE_ID) {
       setStaffMembers([])
       setStaffLoading(false)
       return
@@ -278,7 +288,7 @@ export default function Settings() {
     )
 
     return unsubscribe
-  }, [STORE_ID, hasAccess])
+  }, [STORE_ID])
 
   useEffect(() => {
     if (!settingsRef) {
@@ -767,10 +777,6 @@ export default function Settings() {
     }
   }
 
-  if (!storeLoading && !hasAccess) {
-    return <AccessDenied feature="settings" role={role ?? null} />
-  }
-
   if (storeLoading) {
     return <div className="page">Loading store access…</div>
   }
@@ -821,7 +827,7 @@ export default function Settings() {
                 </option>
                 {staffRoleOptions.map(option => (
                   <option key={option} value={option}>
-                    {formatRoleLabel(option)}
+                    {formatRoleName(option)}
                   </option>
                 ))}
               </select>
@@ -876,7 +882,7 @@ export default function Settings() {
                   <div className="settings-list__content">
                     <p className="settings-list__title">{member.email || 'Unknown staff'}</p>
                     <p className="settings-list__description">
-                      {`Current role: ${formatRoleLabel(member.role)}`}
+                      {`Current role: ${formatRoleName(member.role)}`}
                       {member.invitedBy ? `\nInvited by: ${member.invitedBy}` : ''}
                     </p>
                   </div>
@@ -897,7 +903,7 @@ export default function Settings() {
                           {roleOptionsAvailable &&
                             staffRoleOptions.map(option => (
                               <option key={option} value={option}>
-                                {formatRoleLabel(option)}
+                                {formatRoleName(option)}
                               </option>
                             ))}
                         </select>
@@ -967,8 +973,8 @@ export default function Settings() {
           <dd className="settings-summary__value">{STORE_ID}</dd>
         </div>
         <div className="settings-summary__item">
-          <dt className="settings-summary__label">Role</dt>
-          <dd className="settings-summary__value">{role ?? 'Not assigned'}</dd>
+          <dt className="settings-summary__label">Roles</dt>
+          <dd className="settings-summary__value">Manage from Staff settings</dd>
         </div>
         <div className="settings-summary__item">
           <dt className="settings-summary__label">Signed in as</dt>

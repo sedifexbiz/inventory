@@ -5,21 +5,19 @@ import { auth } from '../firebase'
 import { useAuthUser } from '../hooks/useAuthUser'
 import { useConnectivityStatus } from '../hooks/useConnectivityStatus'
 import { useActiveStore } from '../hooks/useActiveStore'
-import type { AppFeature } from '../utils/permissions'
-import { canAccessFeature } from '../utils/permissions'
 import './Shell.css'
 import './Workspace.css'
 
-type NavItem = { to: string; label: string; end?: boolean; feature: AppFeature }
+type NavItem = { to: string; label: string; end?: boolean }
 
 const NAV_ITEMS: NavItem[] = [
-  { to: '/', label: 'Dashboard', end: true, feature: 'dashboard' },
-  { to: '/products', label: 'Products', feature: 'products' },
-  { to: '/sell', label: 'Sell', feature: 'sell' },
-  { to: '/receive', label: 'Receive', feature: 'receive' },
-  { to: '/customers', label: 'Customers', feature: 'customers' },
-  { to: '/close-day', label: 'Close Day', feature: 'close-day' },
-  { to: '/settings', label: 'Settings', feature: 'settings' },
+  { to: '/', label: 'Dashboard', end: true },
+  { to: '/products', label: 'Products' },
+  { to: '/sell', label: 'Sell' },
+  { to: '/receive', label: 'Receive' },
+  { to: '/customers', label: 'Customers' },
+  { to: '/close-day', label: 'Close Day' },
+  { to: '/settings', label: 'Settings' },
 ]
 
 function navLinkClass(isActive: boolean) {
@@ -70,25 +68,12 @@ function buildBannerMessage(queueStatus: ReturnType<typeof useConnectivityStatus
   return null
 }
 
-function formatStoreRole(role: string | null) {
-  if (!role) {
-    return null
-  }
-
-  return role
-    .split(/[-_\s]+/)
-    .filter(Boolean)
-    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ')
-}
-
 export default function Shell({ children }: { children: React.ReactNode }) {
   const user = useAuthUser()
   const userEmail = user?.email ?? 'Account'
   const connectivity = useConnectivityStatus()
   const {
     storeId: activeStoreId,
-    role: storeRole,
     stores: availableStores,
     isLoading: storeLoading,
     error: storeError,
@@ -139,7 +124,6 @@ export default function Shell({ children }: { children: React.ReactNode }) {
     : availableStores.length === 0
       ? 'No store access'
       : 'Select a store'
-  const formattedRole = formatStoreRole(storeRole)
 
   function handleStoreChange(event: React.ChangeEvent<HTMLSelectElement>) {
     const { value } = event.target
@@ -147,14 +131,6 @@ export default function Shell({ children }: { children: React.ReactNode }) {
       selectStore(value)
     }
   }
-
-  const visibleNavItems = useMemo(() => {
-    if (storeLoading) {
-      return NAV_ITEMS
-    }
-
-    return NAV_ITEMS.filter(item => canAccessFeature(storeRole, item.feature))
-  }, [storeLoading, storeRole])
 
   return (
     <div className="shell">
@@ -166,7 +142,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
           </div>
 
           <nav className="shell__nav" aria-label="Primary">
-            {visibleNavItems.map(item => (
+            {NAV_ITEMS.map(item => (
               <NavLink
                 key={item.to}
                 to={item.to}
@@ -200,13 +176,8 @@ export default function Shell({ children }: { children: React.ReactNode }) {
                     {store}
                   </option>
                 ))}
-              </select>
-              {formattedRole ? (
-                <span className="shell__store-role" aria-live="polite">
-                  {formattedRole}
-                </span>
-              ) : null}
-            </div>
+            </select>
+          </div>
 
             {banner && (
               <div

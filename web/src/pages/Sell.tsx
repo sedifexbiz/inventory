@@ -24,8 +24,6 @@ import {
   saveCachedCustomers,
   saveCachedProducts,
 } from '../utils/offlineCache'
-import { AccessDenied } from '../components/AccessDenied'
-import { canAccessFeature } from '../utils/permissions'
 import { buildSimplePdf } from '../utils/pdf'
 
 type Product = {
@@ -122,7 +120,7 @@ function isOfflineError(error: unknown) {
 
 export default function Sell() {
   const user = useAuthUser()
-  const { storeId: STORE_ID, role, isLoading: storeLoading, error: storeError } = useActiveStore()
+  const { storeId: STORE_ID, isLoading: storeLoading, error: storeError } = useActiveStore()
 
   const [products, setProducts] = useState<Product[]>([])
   const [customers, setCustomers] = useState<Customer[]>([])
@@ -142,10 +140,8 @@ export default function Sell() {
   const changeDue = Math.max(0, amountPaid - subtotal)
   const isCashShort = paymentMethod === 'cash' && amountPaid < subtotal && subtotal > 0
 
-  const hasAccess = canAccessFeature(role, 'sell')
-
   useEffect(() => {
-    if (!STORE_ID || !hasAccess) return
+    if (!STORE_ID) return
 
     let cancelled = false
 
@@ -184,10 +180,10 @@ export default function Sell() {
       cancelled = true
       unsubscribe()
     }
-  }, [STORE_ID, hasAccess])
+  }, [STORE_ID])
 
   useEffect(() => {
-    if (!STORE_ID || !hasAccess) return
+    if (!STORE_ID) return
 
     let cancelled = false
 
@@ -226,15 +222,15 @@ export default function Sell() {
       cancelled = true
       unsubscribe()
     }
-  }, [STORE_ID, hasAccess])
+  }, [STORE_ID])
 
   useEffect(() => {
-    if (!hasAccess || !receipt) return
+    if (!receipt) return
     const timeout = window.setTimeout(() => {
       window.print()
     }, 250)
     return () => window.clearTimeout(timeout)
-  }, [hasAccess, receipt])
+  }, [receipt])
 
   useEffect(() => {
     if (!receipt) {
@@ -340,10 +336,6 @@ export default function Sell() {
       setAmountTendered('')
     }
   }, [paymentMethod])
-
-  if (!storeLoading && !hasAccess) {
-    return <AccessDenied feature="sell" role={role ?? null} />
-  }
 
 
   function addToCart(p: Product) {

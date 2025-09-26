@@ -1,13 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuthUser } from './useAuthUser'
 
-export type StoreRole = 'owner' | 'manager' | 'cashier' | string
-
-type StoreRoleMap = Record<string, StoreRole>
-
 interface ActiveStoreState {
   storeId: string | null
-  role: StoreRole | null
   stores: string[]
   isLoading: boolean
   error: string | null
@@ -17,14 +12,11 @@ interface ActiveStoreState {
 interface StoreClaims {
   stores?: unknown
   activeStoreId?: unknown
-  roleByStore?: unknown
 }
 
 interface InternalStoreState {
   storeId: string | null
-  role: StoreRole | null
   stores: string[]
-  rolesByStore: StoreRoleMap
   isLoading: boolean
   error: string | null
 }
@@ -37,28 +29,6 @@ function normalizeStoreList(claims: StoreClaims): string[] {
   }
 
   return claims.stores.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
-}
-
-function normalizeRoleMap(claims: StoreClaims): StoreRoleMap {
-  if (typeof claims.roleByStore !== 'object' || claims.roleByStore === null) {
-    return {}
-  }
-
-  const roleEntries = Object.entries(claims.roleByStore as Record<string, unknown>)
-  return roleEntries.reduce<StoreRoleMap>((acc, [storeId, value]) => {
-    if (typeof value === 'string' && typeof storeId === 'string' && storeId.trim().length > 0) {
-      acc[storeId] = value as StoreRole
-    }
-    return acc
-  }, {})
-}
-
-function resolveRole(rolesByStore: StoreRoleMap, storeId: string | null): StoreRole | null {
-  if (!storeId) {
-    return null
-  }
-
-  return rolesByStore[storeId] ?? null
 }
 
 function getStorageKey(uid: string) {
@@ -121,9 +91,7 @@ export function useActiveStore(): ActiveStoreState {
   const user = useAuthUser()
   const [state, setState] = useState<InternalStoreState>({
     storeId: null,
-    role: null,
     stores: [],
-    rolesByStore: {},
     isLoading: Boolean(user),
     error: null,
   })
@@ -143,7 +111,6 @@ export function useActiveStore(): ActiveStoreState {
         return {
           ...prev,
           storeId,
-          role: resolveRole(prev.rolesByStore, storeId),
         }
       })
     },
@@ -154,7 +121,7 @@ export function useActiveStore(): ActiveStoreState {
     let cancelled = false
 
     if (!user) {
-      setState({ storeId: null, role: null, stores: [], rolesByStore: {}, isLoading: false, error: null })
+      setState({ storeId: null, stores: [], isLoading: false, error: null })
       return
     }
 
@@ -168,10 +135,8 @@ export function useActiveStore(): ActiveStoreState {
         if (cancelled) return
         const claims: StoreClaims = result.claims as StoreClaims
         const stores = normalizeStoreList(claims)
-        const rolesByStore = normalizeRoleMap(claims)
         const activeClaim = typeof claims.activeStoreId === 'string' ? claims.activeStoreId : null
         const resolvedStoreId = resolveStoreId(stores, activeClaim, persistedStoreId, user.uid)
-        const role = resolveRole(rolesByStore, resolvedStoreId)
 
         if (resolvedStoreId && stores.includes(resolvedStoreId)) {
           persistStoreId(user.uid, resolvedStoreId)
@@ -181,9 +146,7 @@ export function useActiveStore(): ActiveStoreState {
 
         setState({
           storeId: resolvedStoreId,
-          role,
           stores,
-          rolesByStore,
           isLoading: false,
           error: null,
         })
@@ -193,9 +156,7 @@ export function useActiveStore(): ActiveStoreState {
         if (cancelled) return
         setState({
           storeId: user.uid ?? null,
-          role: null,
           stores: [],
-          rolesByStore: {},
           isLoading: false,
           error: 'We could not determine your store access. Some actions may fail.',
         })
@@ -209,13 +170,12 @@ export function useActiveStore(): ActiveStoreState {
   return useMemo(
     () => ({
       storeId: state.storeId,
-      role: state.role,
       stores: state.stores,
       isLoading: state.isLoading,
       error: state.error,
       selectStore,
     }),
-    [selectStore, state.error, state.isLoading, state.role, state.storeId, state.stores],
+    [selectStore, state.error, state.isLoading, state.storeId, state.stores],
   )
 }
 

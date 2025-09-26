@@ -12,8 +12,6 @@ import {
 import { db } from '../firebase'
 import { useActiveStore } from '../hooks/useActiveStore'
 import { useAuthUser } from '../hooks/useAuthUser'
-import { AccessDenied } from '../components/AccessDenied'
-import { canAccessFeature } from '../utils/permissions'
 
 const DENOMINATIONS = [200, 100, 50, 20, 10, 5, 2, 1, 0.5, 0.2, 0.1] as const
 
@@ -41,7 +39,7 @@ function parseQuantity(input: string): number {
 }
 
 export default function CloseDay() {
-  const { storeId: STORE_ID, role, isLoading: storeLoading, error: storeError } = useActiveStore()
+  const { storeId: STORE_ID, isLoading: storeLoading, error: storeError } = useActiveStore()
   const user = useAuthUser()
 
   const [total, setTotal] = useState(0)
@@ -54,10 +52,9 @@ export default function CloseDay() {
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [submitSuccess, setSubmitSuccess] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const hasAccess = canAccessFeature(role, 'close-day')
 
   useEffect(() => {
-    if (!STORE_ID || !hasAccess) return
+    if (!STORE_ID) return
     const start = new Date(); start.setHours(0,0,0,0)
     const q = query(
       collection(db,'sales'),
@@ -70,7 +67,7 @@ export default function CloseDay() {
       snap.forEach(d => sum += (d.data().total || 0))
       setTotal(sum)
     })
-  }, [STORE_ID, hasAccess])
+  }, [STORE_ID])
 
   useEffect(() => {
     const style = document.createElement('style')
@@ -111,7 +108,7 @@ export default function CloseDay() {
 
   const handleSubmit: React.FormEventHandler<HTMLFormElement> = async event => {
     event.preventDefault()
-    if (!STORE_ID || !hasAccess) return
+    if (!STORE_ID) return
 
     setSubmitError(null)
     setSubmitSuccess(false)
@@ -163,10 +160,6 @@ export default function CloseDay() {
     } finally {
       setIsSubmitting(false)
     }
-  }
-
-  if (!storeLoading && !hasAccess) {
-    return <AccessDenied feature="close-day" role={role ?? null} />
   }
 
   if (storeLoading) return <div>Loading…</div>

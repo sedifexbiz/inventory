@@ -6,8 +6,6 @@ import { db, functions } from '../firebase'
 import { useActiveStore } from '../hooks/useActiveStore'
 import './Receive.css'
 import { queueCallableRequest } from '../utils/offlineQueue'
-import { AccessDenied } from '../components/AccessDenied'
-import { canAccessFeature } from '../utils/permissions'
 import { loadCachedProducts, saveCachedProducts, PRODUCT_CACHE_LIMIT } from '../utils/offlineCache'
 
 type Product = {
@@ -32,7 +30,7 @@ function isOfflineError(error: unknown) {
 }
 
 export default function Receive() {
-  const { storeId: STORE_ID, role, isLoading: storeLoading, error: storeError } = useActiveStore()
+  const { storeId: STORE_ID, isLoading: storeLoading, error: storeError } = useActiveStore()
 
   const [products, setProducts] = useState<Product[]>([])
   const [selected, setSelected] = useState<string>('')
@@ -44,8 +42,6 @@ export default function Receive() {
   const [busy, setBusy] = useState(false)
   const statusTimeoutRef = useRef<number | null>(null)
   const receiveStock = useMemo(() => httpsCallable(functions, 'receiveStock'), [])
-  const hasAccess = canAccessFeature(role, 'receive')
-
   useEffect(() => {
     return () => {
       if (statusTimeoutRef.current) {
@@ -67,7 +63,7 @@ export default function Receive() {
   }
 
   useEffect(() => {
-    if (!STORE_ID || !hasAccess) return
+    if (!STORE_ID) return
 
     let cancelled = false
 
@@ -106,7 +102,7 @@ export default function Receive() {
       cancelled = true
       unsubscribe()
     }
-  }, [STORE_ID, hasAccess])
+  }, [STORE_ID])
 
   async function receive() {
     if (!STORE_ID) {
@@ -170,10 +166,6 @@ export default function Receive() {
     } finally {
       setBusy(false)
     }
-  }
-
-  if (!storeLoading && !hasAccess) {
-    return <AccessDenied feature="receive" role={role ?? null} />
   }
 
   if (storeLoading) return <div>Loading…</div>

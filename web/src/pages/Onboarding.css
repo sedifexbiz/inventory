@@ -19,6 +19,17 @@
   font-size: 0.875rem;
 }
 
+.onboarding-page__provisional-banner {
+  background: #fff7ed;
+  border-color: #fed7aa;
+  color: #9a3412;
+  gap: 0.5rem;
+}
+
+.onboarding-page__provisional-banner p {
+  margin: 0;
+}
+
 .onboarding-card {
   display: flex;
   flex-direction: column;

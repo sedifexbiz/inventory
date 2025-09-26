@@ -6,8 +6,6 @@ import {
 import type { Timestamp } from 'firebase/firestore'
 import { db } from '../firebase'
 import { useActiveStore } from '../hooks/useActiveStore'
-import { AccessDenied } from '../components/AccessDenied'
-import { canAccessFeature } from '../utils/permissions'
 import './Products.css'
 import { loadCachedProducts, saveCachedProducts, PRODUCT_CACHE_LIMIT } from '../utils/offlineCache'
 import { buildSimplePdf } from '../utils/pdf'
@@ -150,7 +148,7 @@ function ScannerModal({ mode, onValue, onClose }: ScannerProps) {
 
 export default function Products() {
   // Keep all hooks *unconditional* and *top-level*
-  const { storeId: STORE_ID, role, isLoading: storeLoading, error: storeError } = useActiveStore()
+  const { storeId: STORE_ID, isLoading: storeLoading, error: storeError } = useActiveStore()
 
   const [items, setItems] = useState<Product[]>([])
   const [name, setName] = useState('')
@@ -169,8 +167,6 @@ export default function Products() {
   const [searchTerm, setSearchTerm] = useState('')
   const [stockFilter, setStockFilter] = useState<'all' | 'in-stock' | 'low-stock' | 'out-of-stock'>('all')
 
-  const hasAccess = canAccessFeature(role, 'products')
-
   // cleanup for transient UI feedback timers
   useEffect(() => {
     return () => {
@@ -183,7 +179,7 @@ export default function Products() {
 
   // live products subscription
   useEffect(() => {
-    if (!STORE_ID || !hasAccess) return
+    if (!STORE_ID) return
 
     let cancelled = false
 
@@ -222,11 +218,7 @@ export default function Products() {
       cancelled = true
       unsub()
     }
-  }, [STORE_ID, hasAccess])
-
-  if (!storeLoading && !hasAccess) {
-    return <AccessDenied feature="products" role={role ?? null} />
-  }
+  }, [STORE_ID])
 
   function showFormFeedback(tone: 'success' | 'error', message: string) {
     setFormFeedback({ tone, message })
