@@ -117,6 +117,13 @@ service cloud.firestore {
       allow update, delete: if hasRole(resource.data.storeId, ['owner','manager']) && storeIdUnchanged();
     }
 
+    match /storeUsers/{membershipId} {
+      allow read: if hasRole(resource.data.storeId, ['owner']);
+      allow create: if hasRole(request.resource.data.storeId, ['owner']);
+      allow update: if hasRole(resource.data.storeId, ['owner']) && storeIdUnchanged();
+      allow delete: if hasRole(resource.data.storeId, ['owner']);
+    }
+
     /* ---------- User-scoped sessions ---------- */
 
     match /sessions/{id} {
