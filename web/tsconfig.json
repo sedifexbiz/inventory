@@ -15,10 +15,12 @@
     "noEmit": true,
     "jsx": "react-jsx",
     "types": [
-      "vite/client"
+      "vite/client",
+      "vitest/globals"
     ]
   },
   "include": [
-    "src"
+    "src",
+    "tests"
   ]
 }
