@@ -46,6 +46,10 @@ This repo is a drop-in starter for **Sedifex** (inventory & POS). It ships as a 
 - Enable **Firestore** and publish `firestore.rules`.
 - Create a second project for production later (e.g., `sedifex-prod`).
 
+### Workspace access spreadsheet
+- The onboarding Google Sheet should include workspace metadata columns such as `contractStart`, `contractEnd`, `paymentStatus`, `amountPaid`, and `company` for each store row.
+- Date columns can be provided as ISO-like strings (e.g., `2024-01-15`) or spreadsheet serial numbers; payment amounts can include currency symbols and will be normalized automatically.
+
 ## Branding
 - Name: **Sedifex**
 - Tagline: *Sell faster. Count smarter.*
