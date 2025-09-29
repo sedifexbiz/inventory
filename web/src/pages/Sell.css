@@ -1,0 +1,362 @@
+.sell-page__total {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  background: #eef2ff;
+  border-radius: 16px;
+  padding: 12px 16px;
+  min-width: 160px;
+}
+
+.sell-page__total-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #6366f1;
+  font-weight: 600;
+}
+
+.sell-page__total-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: #312e81;
+}
+
+.sell-page__grid {
+  display: grid;
+  gap: 24px;
+}
+
+@media (min-width: 960px) {
+  .sell-page__grid {
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+  }
+}
+
+.sell-page__section-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sell-page__catalog-list {
+  display: grid;
+  gap: 12px;
+  max-height: 360px;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+.sell-page__product {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  border-radius: 14px;
+  padding: 14px 16px;
+  text-align: left;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+}
+
+.sell-page__product:hover,
+.sell-page__product:focus-visible {
+  border-color: rgba(99, 102, 241, 0.4);
+  box-shadow: 0 18px 40px -26px rgba(99, 102, 241, 0.6);
+  transform: translateY(-1px);
+}
+
+.sell-page__product-name {
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.sell-page__product-meta {
+  display: block;
+  font-size: 13px;
+  color: #64748b;
+  margin-top: 4px;
+}
+
+.sell-page__product-action {
+  font-weight: 600;
+  color: #4338ca;
+}
+
+.sell-page__summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 16px;
+  font-size: 16px;
+}
+
+.sell-page__summary strong {
+  font-size: 20px;
+  color: #111827;
+}
+
+.sell-page__numeric {
+  text-align: right;
+}
+
+.sell-page__form-grid {
+  display: grid;
+  gap: 16px;
+  margin-top: 20px;
+}
+
+@media (min-width: 960px) {
+  .sell-page__form-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    align-items: end;
+  }
+}
+
+.sell-page__field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sell-page__input,
+.sell-page__select {
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  font-size: 15px;
+}
+
+.sell-page__input:focus,
+.sell-page__select:focus {
+  outline: none;
+  border-color: rgba(99, 102, 241, 0.6);
+  box-shadow: 0 0 0 2px rgba(129, 140, 248, 0.35);
+}
+
+.sell-page__customers-link {
+  color: #4338ca;
+  font-weight: 600;
+}
+
+.sell-page__payment-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid #e2e8f0;
+}
+
+@media (min-width: 720px) {
+  .sell-page__payment-summary {
+    flex-direction: row;
+    justify-content: space-between;
+  }
+}
+
+.sell-page__summary-label {
+  display: block;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #64748b;
+  margin-bottom: 4px;
+}
+
+.sell-page__change {
+  color: #047857;
+}
+
+.sell-page__change.is-short {
+  color: #b91c1c;
+}
+
+.sell-page__message {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 16px 0 0;
+  font-size: 14px;
+}
+
+.sell-page__message--error {
+  color: #b91c1c;
+}
+
+.sell-page__message--success {
+  color: #047857;
+}
+
+.sell-page__loyalty {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px dashed rgba(67, 56, 202, 0.35);
+  border-radius: 12px;
+  background: rgba(224, 231, 255, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sell-page__loyalty-title {
+  font-size: 14px;
+  color: #312e81;
+}
+
+.sell-page__loyalty-text {
+  font-size: 13px;
+  color: #4338ca;
+  margin: 0;
+}
+
+.sell-page__loyalty-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sell-page__engagement {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid #bbf7d0;
+  border-radius: 16px;
+  background: #f0fdf4;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sell-page__engagement-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #065f46;
+  margin: 0;
+}
+
+.sell-page__engagement-text {
+  margin: 0;
+  font-size: 14px;
+  color: #047857;
+}
+
+.sell-page__engagement-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.sell-page__engagement-details {
+  font-size: 13px;
+  color: #14532d;
+}
+
+.sell-page__engagement-preview {
+  margin: 8px 0 0;
+  padding: 12px;
+  background: #dcfce7;
+  border-radius: 12px;
+  font-family: 'Courier New', Courier, monospace;
+  white-space: pre-wrap;
+}
+
+.receipt-print {
+  display: none;
+}
+
+.receipt-print.is-ready {
+  display: block;
+  position: fixed;
+  inset: 0;
+  padding: 24px;
+  background: #ffffff;
+  color: #111827;
+  font-family: 'Courier New', Courier, monospace;
+  z-index: -1;
+}
+
+.receipt-print__inner {
+  max-width: 360px;
+  margin: 0 auto;
+}
+
+.receipt-print__title {
+  text-align: center;
+  margin-bottom: 4px;
+}
+
+.receipt-print__meta {
+  text-align: center;
+  margin: 0 0 16px;
+  font-size: 13px;
+}
+
+.receipt-print__section {
+  margin-bottom: 16px;
+  font-size: 14px;
+}
+
+.receipt-print__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  margin-bottom: 16px;
+}
+
+.receipt-print__table th,
+.receipt-print__table td {
+  padding: 6px 0;
+  text-align: left;
+  border-bottom: 1px dashed #d4d4d4;
+}
+
+.receipt-print__table th:last-child,
+.receipt-print__table td:last-child {
+  text-align: right;
+}
+
+.receipt-print__summary {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.receipt-print__summary div {
+  display: flex;
+  justify-content: space-between;
+}
+
+.receipt-print__footer {
+  text-align: center;
+  font-size: 13px;
+  margin: 0;
+}
+
+@media print {
+  body * {
+    visibility: hidden !important;
+  }
+
+  .receipt-print.is-ready,
+  .receipt-print.is-ready * {
+    visibility: visible !important;
+  }
+
+  .receipt-print.is-ready {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 999;
+  }
+}
+
+@media (max-width: 640px) {
+  .sell-page__total {
+    width: 100%;
+    align-items: flex-start;
+  }
+}

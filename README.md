@@ -4,7 +4,7 @@ This repo is a drop-in starter for **Sedifex** (inventory & POS). It ships as a 
 
 ## What’s inside
 - `web/` — React + Vite + TypeScript PWA
-- `functions/` — Firebase Cloud Functions (Node 20) with a secure **commitSale** transaction
+- `functions/` — Firebase Cloud Functions (Node 20) for store onboarding and stock receipts
 - `firestore.rules` — Multi-tenant security rules scaffold
 - `.github/workflows/` — Optional CI for deploying Functions (if you want to use GitHub Actions)
 

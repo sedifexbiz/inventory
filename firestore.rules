@@ -1,0 +1,204 @@
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function getRequesterMembership() {
+      return request.auth != null
+        ? get(/databases/$(database)/documents/teamMembers/$(request.auth.uid))
+        : null;
+    }
+
+    function membershipExists(member) {
+      return member != null && member.exists();
+    }
+
+    function storeIdFromData(data) {
+      return data != null
+        ? (
+            data.keys().hasAny(['storeId']) && data.storeId is string && data.storeId != ''
+              ? data.storeId
+              : (
+                  data.keys().hasAny(['storeid']) && data.storeid is string && data.storeid != ''
+                    ? data.storeid
+                    : null
+                )
+          )
+        : null;
+    }
+
+    function memberStoreId(member) {
+      return membershipExists(member)
+        ? storeIdFromData(member.data)
+        : null;
+    }
+
+    function memberRole(member) {
+      return membershipExists(member) && member.data.role is string && member.data.role != ''
+        ? member.data.role
+        : null;
+    }
+
+    function isOwner(member) {
+      return memberRole(member) == 'owner';
+    }
+
+    function hasStaffAccess(member) {
+      let role = memberRole(member);
+      return role == 'owner' || role == 'staff';
+    }
+
+    function matchesMemberStore(member, storeId) {
+      let store = memberStoreId(member);
+      return store != null && store == storeId;
+    }
+
+    function hasStoreAccess(member, storeId) {
+      return hasStaffAccess(member) && matchesMemberStore(member, storeId);
+    }
+
+    function hasOwnerAccess(member, storeId) {
+      return isOwner(member) && matchesMemberStore(member, storeId);
+    }
+
+    function dataHasStore(data) {
+      return storeIdFromData(data) != null;
+    }
+
+    function requestRoleIsValid() {
+      return request.resource.data.role is string
+        && (request.resource.data.role == 'owner' || request.resource.data.role == 'staff');
+    }
+
+    function requestUidMatches(memberId) {
+      return !request.resource.data.keys().hasAny(['uid']) || request.resource.data.uid == memberId;
+    }
+
+    function canReadStoreDocument(storeId) {
+      let member = getRequesterMembership();
+      return hasStoreAccess(member, storeId);
+    }
+
+    function canManageStoreDocument(storeId) {
+      let member = getRequesterMembership();
+      return hasOwnerAccess(member, storeId);
+    }
+
+    function canReadStoreResource() {
+      let storeId = storeIdFromData(resource.data);
+      return storeId != null && hasStoreAccess(getRequesterMembership(), storeId);
+    }
+
+    function canCreateStoreResource() {
+      let storeId = storeIdFromData(request.resource.data);
+      return storeId != null
+        && hasStoreAccess(getRequesterMembership(), storeId);
+    }
+
+    function canUpdateStoreResource() {
+      let currentStoreId = storeIdFromData(resource.data);
+      let newStoreId = storeIdFromData(request.resource.data);
+      return currentStoreId != null
+        && newStoreId != null
+        && currentStoreId == newStoreId
+        && hasStoreAccess(getRequesterMembership(), currentStoreId);
+    }
+
+    function canOwnerCreateStoreResource() {
+      let storeId = storeIdFromData(request.resource.data);
+      return storeId != null
+        && hasOwnerAccess(getRequesterMembership(), storeId);
+    }
+
+    function canOwnerWriteStoreResource() {
+      let storeId = storeIdFromData(resource.data);
+      return storeId != null
+        && hasOwnerAccess(getRequesterMembership(), storeId);
+    }
+
+    match /teamMembers/{memberId} {
+      allow read: if resource != null
+        && dataHasStore(resource.data)
+        && (
+          (request.auth != null && request.auth.uid == memberId && membershipExists(getRequesterMembership()))
+          || hasOwnerAccess(getRequesterMembership(), storeIdFromData(resource.data))
+        );
+
+      allow create: if request.auth != null
+        && requestUidMatches(memberId)
+        && dataHasStore(request.resource.data)
+        && requestRoleIsValid()
+        && (
+          (
+            membershipExists(getRequesterMembership())
+            && hasOwnerAccess(getRequesterMembership(), storeIdFromData(request.resource.data))
+          )
+          || (
+            !membershipExists(getRequesterMembership())
+            && request.auth.uid == memberId
+            && request.resource.data.role == 'owner'
+          )
+        );
+
+      allow update: if request.auth != null
+        && requestUidMatches(memberId)
+        && dataHasStore(resource.data)
+        && dataHasStore(request.resource.data)
+        && storeIdFromData(resource.data) == storeIdFromData(request.resource.data)
+        && membershipExists(getRequesterMembership())
+        && hasOwnerAccess(getRequesterMembership(), storeIdFromData(resource.data))
+        && requestRoleIsValid();
+
+      allow delete: if request.auth != null
+        && dataHasStore(resource.data)
+        && membershipExists(getRequesterMembership())
+        && hasOwnerAccess(getRequesterMembership(), storeIdFromData(resource.data));
+    }
+
+    match /stores/{storeId} {
+      allow read: if canReadStoreDocument(storeId);
+      allow write: if canManageStoreDocument(storeId);
+
+      match /{document=**} {
+        allow read: if canReadStoreDocument(storeId);
+        allow write: if canManageStoreDocument(storeId);
+      }
+    }
+
+    match /products/{productId} {
+      allow read: if canReadStoreResource();
+      allow create: if canOwnerCreateStoreResource();
+      allow update: if canUpdateStoreResource();
+      allow delete: if canOwnerWriteStoreResource();
+    }
+
+    match /sales/{saleId} {
+      allow read: if canReadStoreResource();
+      allow create: if canCreateStoreResource();
+      allow update: if canUpdateStoreResource();
+      allow delete: if canOwnerWriteStoreResource();
+    }
+
+    match /saleItems/{saleItemId} {
+      allow read: if canReadStoreResource();
+      allow create: if canCreateStoreResource();
+      allow update: if canUpdateStoreResource();
+      allow delete: if canOwnerWriteStoreResource();
+    }
+
+    match /ledger/{entryId} {
+      allow read: if canReadStoreResource();
+      allow create: if canCreateStoreResource();
+      allow update: if canUpdateStoreResource();
+      allow delete: if canOwnerWriteStoreResource();
+    }
+
+    match /stock/{entryId} {
+      allow read: if canReadStoreResource();
+      allow create: if canCreateStoreResource();
+      allow update: if canUpdateStoreResource();
+      allow delete: if canOwnerWriteStoreResource();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
