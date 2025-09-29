@@ -1,16 +1,25 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { collection, query, orderBy, limit, onSnapshot, where } from 'firebase/firestore'
+import {
+  collection,
+  query,
+  orderBy,
+  limit,
+  onSnapshot,
+  where,
+  runTransaction,
+  doc,
+  serverTimestamp,
+} from 'firebase/firestore'
 import { FirebaseError } from 'firebase/app'
-import { httpsCallable } from 'firebase/functions'
-import { db, functions } from '../firebase'
+import { db } from '../firebase'
 import { useActiveStoreContext } from '../context/ActiveStoreProvider'
 import './Receive.css'
-import { queueCallableRequest } from '../utils/offlineQueue'
 import { loadCachedProducts, saveCachedProducts, PRODUCT_CACHE_LIMIT } from '../utils/offlineCache'
 
 type Product = {
   id: string
   name: string
+  storeId?: string
   stockCount?: number
   createdAt?: unknown
   updatedAt?: unknown
@@ -45,7 +54,7 @@ export default function Receive() {
   const [status, setStatus] = useState<{ tone: 'success' | 'error'; message: string } | null>(null)
   const [busy, setBusy] = useState(false)
   const statusTimeoutRef = useRef<number | null>(null)
-  const receiveStock = useMemo(() => httpsCallable(functions, 'receiveStock'), [])
+
   useEffect(() => {
     return () => {
       if (statusTimeoutRef.current) {
@@ -76,6 +85,7 @@ export default function Receive() {
       }
     }
 
+    // 1) Warm cache
     loadCachedProducts<Product>({ storeId: activeStoreId })
       .then(cached => {
         if (!cancelled && cached.length) {
@@ -88,6 +98,7 @@ export default function Receive() {
         console.warn('[receive] Failed to load cached products', error)
       })
 
+    // 2) Live query (store-partitioned)
     const q = query(
       collection(db, 'products'),
       where('storeId', '==', activeStoreId),
@@ -119,64 +130,116 @@ export default function Receive() {
       showStatus('error', 'Select a workspace before receiving stock.')
       return
     }
-    const p = products.find(x=>x.id===selected); if (!p) return
+
+    const p = products.find(x => x.id === selected)
+    if (!p) {
+      showStatus('error', 'Select a valid product.')
+      return
+    }
+
     const amount = Number(qty)
     if (!Number.isFinite(amount) || amount <= 0) {
       showStatus('error', 'Enter a valid quantity greater than zero.')
       return
     }
+
     const supplierName = supplier.trim()
     if (!supplierName) {
       showStatus('error', 'Add the supplier who fulfilled this delivery.')
       return
     }
+
     const referenceNumber = reference.trim()
     if (!referenceNumber) {
       showStatus('error', 'Add the packing slip or purchase order reference number.')
       return
     }
+
     const costValue = unitCost.trim()
     const parsedCost = costValue ? Number(costValue) : null
     if (parsedCost !== null && (!Number.isFinite(parsedCost) || parsedCost < 0)) {
       showStatus('error', 'Enter a valid cost that is zero or greater.')
       return
     }
+
     setBusy(true)
-    const payload = {
-      productId: selected,
-      qty: amount,
-      supplier: supplierName,
-      reference: referenceNumber,
-      unitCost: parsedCost,
-    }
 
     try {
-      await receiveStock(payload)
+      const productRef = doc(db, 'products', selected)
+      const receiptId = doc(collection(db, 'stockReceipts')).id
+      const now = serverTimestamp()
+
+      await runTransaction(db, async (tx) => {
+        // READ FIRST
+        const snap = await tx.get(productRef)
+        if (!snap.exists()) throw new Error('PRODUCT_NOT_FOUND')
+        const data = snap.data() as any
+
+        if (data.storeId !== activeStoreId) {
+          throw new Error('PRODUCT_STORE_MISMATCH')
+        }
+
+        const currentStock = Number(data.stockCount ?? 0)
+        if (!Number.isFinite(currentStock)) {
+          throw new Error('BAD_PRODUCT_STOCKCOUNT')
+        }
+
+        // CREATE RECEIPT
+        const receiptRef = doc(db, 'stockReceipts', receiptId)
+        tx.set(receiptRef, {
+          id: receiptId,
+          storeId: activeStoreId,
+          createdAt: now,
+          updatedAt: now,
+          status: 'posted',
+          vendor: supplierName,
+          reference: referenceNumber,
+          note: null,
+          lines: [
+            {
+              productId: selected,
+              qty: amount,
+              unitCost: parsedCost ?? null,
+            },
+          ],
+        })
+
+        // UPDATE PRODUCT STOCK
+        tx.update(productRef, {
+          stockCount: currentStock + amount,
+          updatedAt: now,
+          lastReceiptId: receiptId,
+          lastReceiptAt: now,
+        })
+      })
+
+      // reset form
       setQty('')
       setSupplier('')
       setReference('')
       setUnitCost('')
       showStatus('success', 'Stock received successfully.')
-    } catch (error) {
+    } catch (error: any) {
       console.error('[receive] Failed to update stock', error)
-      if (isOfflineError(error)) {
-        const queued = await queueCallableRequest('receiveStock', payload, 'receipt')
-        if (queued) {
-          setQty('')
-          setSupplier('')
-          setReference('')
-          setUnitCost('')
-          showStatus('success', 'Offline — receipt saved and will sync when you reconnect.')
-          return
-        }
+
+      // Friendlier messages
+      const code = (error?.message || '').toString()
+
+      if (code === 'PRODUCT_NOT_FOUND') {
+        showStatus('error', 'Product not found.')
+      } else if (code === 'PRODUCT_STORE_MISMATCH') {
+        showStatus('error', 'This product belongs to a different workspace.')
+      } else if (code === 'BAD_PRODUCT_STOCKCOUNT') {
+        showStatus('error', 'Product stock is invalid. Please check the product setup.')
+      } else if (isOfflineError(error)) {
+        showStatus('error', 'You appear to be offline. Please reconnect and try again.')
+      } else {
+        showStatus('error', 'Unable to record stock receipt. Please try again.')
       }
-      showStatus('error', 'Unable to record stock receipt. Please try again.')
     } finally {
       setBusy(false)
     }
   }
-
-
 
   return (
     <div className="page receive-page">
@@ -199,11 +262,12 @@ export default function Receive() {
               <option value="">Select product…</option>
               {products.map(p => (
                 <option key={p.id} value={p.id}>
-                  {p.name} (Stock {p.stockCount ?? 0})
+                  {p.name} (Stock {Number.isFinite(p.stockCount as any) ? (p.stockCount as number) : 0})
                 </option>
               ))}
             </select>
           </div>
+
           <div className="field">
             <label className="field__label" htmlFor="receive-qty">Quantity received</label>
             <input
@@ -215,6 +279,7 @@ export default function Receive() {
               onChange={e => setQty(e.target.value)}
             />
           </div>
+
           <div className="field">
             <label className="field__label" htmlFor="receive-supplier">Supplier</label>
             <input
@@ -225,6 +290,7 @@ export default function Receive() {
               onChange={e => setSupplier(e.target.value)}
             />
           </div>
+
           <div className="field">
             <label className="field__label" htmlFor="receive-reference">Reference number</label>
             <input
@@ -235,6 +301,7 @@ export default function Receive() {
               onChange={e => setReference(e.target.value)}
             />
           </div>
+
           <div className="field">
             <label className="field__label" htmlFor="receive-cost">Unit cost (optional)</label>
             <input
@@ -247,6 +314,7 @@ export default function Receive() {
               onChange={e => setUnitCost(e.target.value)}
             />
           </div>
+
           <div className="receive-page__actions">
             <button
               type="button"
@@ -257,6 +325,7 @@ export default function Receive() {
               Add stock
             </button>
           </div>
+
           {status && (
             <p
               className={`receive-page__message receive-page__message--${status.tone}`}
