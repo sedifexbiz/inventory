@@ -30,6 +30,24 @@ service cloud.firestore {
         : null;
     }
 
+    function tokenStoreId() {
+      return request.auth != null
+        && request.auth.token != null
+        && request.auth.token.storeId is string
+        && request.auth.token.storeId != ''
+        ? request.auth.token.storeId
+        : null;
+    }
+
+    function tokenMatchesStore(storeId) {
+      let requestStoreId = tokenStoreId();
+      return requestStoreId != null && storeId != null && requestStoreId == storeId;
+    }
+
+    function tokenMatchesStoreData(data) {
+      return tokenMatchesStore(storeIdFromData(data));
+    }
+
     function memberRole(member) {
       return membershipExists(member) && member.data.role is string && member.data.role != ''
         ? member.data.role
@@ -72,8 +90,7 @@ service cloud.firestore {
     }
 
     function canReadStoreDocument(storeId) {
-      let member = getRequesterMembership();
-      return hasStoreAccess(member, storeId);
+      return resource != null && tokenMatchesStoreData(resource.data);
     }
 
     function canManageStoreDocument(storeId) {
@@ -83,34 +100,102 @@ service cloud.firestore {
 
     function canReadStoreResource() {
       let storeId = storeIdFromData(resource.data);
-      return storeId != null && hasStoreAccess(getRequesterMembership(), storeId);
+      return tokenMatchesStore(storeId);
     }
 
-    function canCreateStoreResource() {
+    function requestMaintainsStoreIdConsistency() {
+      let requestStoreId = storeIdFromData(request.resource.data);
+      if (requestStoreId == null) {
+        return false;
+      }
+
+      if (resource == null) {
+        return true;
+      }
+
+      let resourceStoreId = storeIdFromData(resource.data);
+      return resourceStoreId != null && resourceStoreId == requestStoreId;
+    }
+
+    function canStaffCreateStoreResource() {
       let storeId = storeIdFromData(request.resource.data);
-      return storeId != null
+      return requestMaintainsStoreIdConsistency()
+        && storeId != null
         && hasStoreAccess(getRequesterMembership(), storeId);
     }
 
-    function canUpdateStoreResource() {
+    function canStaffUpdateStoreResource() {
       let currentStoreId = storeIdFromData(resource.data);
-      let newStoreId = storeIdFromData(request.resource.data);
-      return currentStoreId != null
-        && newStoreId != null
-        && currentStoreId == newStoreId
+      return requestMaintainsStoreIdConsistency()
+        && currentStoreId != null
         && hasStoreAccess(getRequesterMembership(), currentStoreId);
     }
 
     function canOwnerCreateStoreResource() {
       let storeId = storeIdFromData(request.resource.data);
-      return storeId != null
+      return requestMaintainsStoreIdConsistency()
+        && storeId != null
         && hasOwnerAccess(getRequesterMembership(), storeId);
+    }
+
+    function canOwnerUpdateStoreResource() {
+      let currentStoreId = storeIdFromData(resource.data);
+      let newStoreId = storeIdFromData(request.resource.data);
+      return currentStoreId != null
+        && newStoreId != null
+        && currentStoreId == newStoreId
+        && hasOwnerAccess(getRequesterMembership(), currentStoreId);
     }
 
     function canOwnerWriteStoreResource() {
       let storeId = storeIdFromData(resource.data);
       return storeId != null
         && hasOwnerAccess(getRequesterMembership(), storeId);
+    }
+
+    function isServiceAccountRequest() {
+      return request.auth != null
+        && request.auth.token != null
+        && request.auth.token.serviceAccount == true;
+    }
+
+    function hasNonEmptyStringField(data, field) {
+      return data != null
+        && data.keys().hasAny([field])
+        && data[field] is string
+        && data[field] != '';
+    }
+
+    function hasNumberInRange(data, field, min, max) {
+      return data != null
+        && data.keys().hasAny([field])
+        && data[field] is number
+        && data[field] >= min
+        && data[field] <= max;
+    }
+
+    function isValidCustomerData(data) {
+      // Assumes customer names are stored as non-empty strings with a practical limit of 200 characters.
+      let hasValidName = hasNonEmptyStringField(data, 'name')
+        && data.name.size() <= 200;
+
+      return hasNonEmptyStringField(data, 'storeId')
+        && hasValidName;
+    }
+
+    function isValidReceiptData(data) {
+      // Assumes receipt quantities represent item counts between 1 and 100,000 to prevent accidental bulk imports.
+      return hasNonEmptyStringField(data, 'storeId')
+        && hasNonEmptyStringField(data, 'productId')
+        && hasNumberInRange(data, 'qty', 1, 100000);
+    }
+
+    function isValidSaleData(data) {
+      // Assumes monetary fields are stored as numbers in the store's currency within +/- $1,000,000.
+      return hasNonEmptyStringField(data, 'storeId')
+        && hasNumberInRange(data, 'total', 0, 1000000)
+        && hasNumberInRange(data, 'taxTotal', 0, 1000000)
+        && hasNumberInRange(data, 'changeDue', 0, 1000000);
     }
 
     match /teamMembers/{memberId} {
@@ -162,38 +247,73 @@ service cloud.firestore {
       }
     }
 
+    match /dailySummaries/{docId} {
+      allow read: if canReadStoreResource() || isServiceAccountRequest();
+      allow create, update, delete: if isServiceAccountRequest();
+    }
+
+    match /activities/{activityId} {
+      allow read: if canReadStoreResource() || isServiceAccountRequest();
+      allow create, update, delete: if isServiceAccountRequest();
+    }
+
+    match /closeouts/{closeoutId} {
+      allow read: if canReadStoreResource() || isServiceAccountRequest();
+      allow create, update, delete: if isServiceAccountRequest();
+    }
+
     match /products/{productId} {
       allow read: if canReadStoreResource();
       allow create: if canOwnerCreateStoreResource();
-      allow update: if canUpdateStoreResource();
+      allow update: if canOwnerUpdateStoreResource();
+      allow delete: if canOwnerWriteStoreResource();
+    }
+
+    match /customers/{customerId} {
+      allow read: if canReadStoreResource();
+      allow create: if canOwnerCreateStoreResource()
+        && isValidCustomerData(request.resource.data);
+      allow update: if canOwnerUpdateStoreResource()
+        && isValidCustomerData(request.resource.data);
       allow delete: if canOwnerWriteStoreResource();
     }
 
     match /sales/{saleId} {
       allow read: if canReadStoreResource();
-      allow create: if canCreateStoreResource();
-      allow update: if canUpdateStoreResource();
+      allow create: if canStaffCreateStoreResource()
+        && isValidSaleData(request.resource.data);
+      allow update: if canStaffUpdateStoreResource()
+        && isValidSaleData(request.resource.data);
       allow delete: if canOwnerWriteStoreResource();
     }
 
     match /saleItems/{saleItemId} {
       allow read: if canReadStoreResource();
-      allow create: if canCreateStoreResource();
-      allow update: if canUpdateStoreResource();
+      allow create: if canStaffCreateStoreResource();
+      allow update: if canStaffUpdateStoreResource();
       allow delete: if canOwnerWriteStoreResource();
     }
 
     match /ledger/{entryId} {
       allow read: if canReadStoreResource();
-      allow create: if canCreateStoreResource();
-      allow update: if canUpdateStoreResource();
+      allow create: if canOwnerCreateStoreResource();
+      allow update: if canOwnerUpdateStoreResource();
       allow delete: if canOwnerWriteStoreResource();
     }
 
     match /stock/{entryId} {
       allow read: if canReadStoreResource();
-      allow create: if canCreateStoreResource();
-      allow update: if canUpdateStoreResource();
+      allow create: if canOwnerCreateStoreResource();
+      allow update: if canOwnerUpdateStoreResource();
+      allow delete: if canOwnerWriteStoreResource();
+    }
+
+    match /receipts/{receiptId} {
+      allow read: if canReadStoreResource();
+      allow create: if canOwnerCreateStoreResource()
+        && isValidReceiptData(request.resource.data);
+      allow update: if canOwnerUpdateStoreResource()
+        && isValidReceiptData(request.resource.data);
       allow delete: if canOwnerWriteStoreResource();
     }
 

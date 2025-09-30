@@ -23,6 +23,7 @@ This repo is a drop-in starter for **Sedifex** (inventory & POS). It ships as a 
    VITE_FB_PROJECT_ID=sedifex-dev
    VITE_FB_STORAGE_BUCKET=sedifex-dev.appspot.com
    VITE_FB_APP_ID=REPLACE_ME
+   VITE_FB_FUNCTIONS_REGION=us-central1
    ```
 4) (Optional) Deploy Functions:
    ```bash
@@ -45,6 +46,12 @@ This repo is a drop-in starter for **Sedifex** (inventory & POS). It ships as a 
 - Enable **Authentication → Phone** and **Email/Password** (optional).
 - Enable **Firestore** and publish `firestore.rules`.
 - Create a second project for production later (e.g., `sedifex-prod`).
+- Schedule the `runNightlyDataHygiene` Cloud Function via Cloud Scheduler (daily at 03:00 UTC) so summaries are recomputed and activity logs stay clean. Monitor for failures in Cloud Logging / Error Reporting.
+
+## Testing
+- Run unit and integration tests from the `web/` directory with `npm run test`.
+- Firestore emulator rules tests are skipped by default. To execute them, start the local Firebase emulators and run tests with
+  `RUN_FIRESTORE_EMULATOR_TESTS=1 npm run test` so the suite can connect to the emulator endpoints.
 
 ### Workspace access spreadsheet
 - The onboarding Google Sheet should include workspace metadata columns such as `contractStart`, `contractEnd`, `paymentStatus`, `amountPaid`, and `company` for each store row.
