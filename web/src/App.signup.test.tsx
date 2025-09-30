@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => {
 
 const firestore = vi.hoisted(() => {
   const docRefByPath = new Map<string, { path: string }>()
+  const docDataByPath = new Map<string, Record<string, unknown>>()
   let timestampCallCount = 0
 
   const docMock = vi.fn((_: unknown, ...segments: string[]) => {
@@ -39,9 +40,36 @@ const firestore = vi.hoisted(() => {
     return docRefByPath.get(key)!
   })
 
-  const setDocMock = vi.fn(async () => {})
-  const updateDocMock = vi.fn(async () => {})
-  const getDocMock = vi.fn(async () => ({ exists: () => false }))
+  const setDocImplementation = async (
+    ref: { path: string },
+    data: Record<string, unknown>,
+    options?: { merge?: boolean },
+  ) => {
+    const existing = docDataByPath.get(ref.path)
+    const nextValue = options?.merge && existing ? { ...existing, ...data } : { ...data }
+    docDataByPath.set(ref.path, nextValue)
+  }
+
+  const updateDocImplementation = async (
+    ref: { path: string },
+    data: Record<string, unknown>,
+  ) => {
+    const existing = docDataByPath.get(ref.path) ?? {}
+    docDataByPath.set(ref.path, { ...existing, ...data })
+  }
+
+  const getDocImplementation = async (ref: { path: string }) => {
+    const stored = docDataByPath.get(ref.path)
+    return {
+      exists: () => stored !== undefined,
+      data: () => (stored ? { ...stored } : undefined),
+      get: (field: string) => (stored ? (stored as Record<string, unknown>)[field] : undefined),
+    }
+  }
+
+  const setDocMock = vi.fn(setDocImplementation)
+  const updateDocMock = vi.fn(updateDocImplementation)
+  const getDocMock = vi.fn(getDocImplementation)
 
   const serverTimestampMock = vi.fn(() => {
     timestampCallCount += 1
@@ -55,6 +83,7 @@ const firestore = vi.hoisted(() => {
     getDocMock,
     serverTimestampMock,
     docRefByPath,
+    docDataByPath,
     reset() {
       docMock.mockClear()
       setDocMock.mockClear()
@@ -62,7 +91,9 @@ const firestore = vi.hoisted(() => {
       getDocMock.mockClear()
       serverTimestampMock.mockClear()
       docRefByPath.clear()
+      docDataByPath.clear()
       timestampCallCount = 0
+      getDocMock.mockImplementation(getDocImplementation)
     },
   }
 })
@@ -140,6 +171,7 @@ vi.mock('./controllers/accessController', async () => {
 
 /** ---------------- imports after mocks ---------------- */
 import App from './App'
+import { generateUniqueStoreId } from './controllers/onboarding'
 
 /** ---------------- helpers ---------------- */
 function createTestUser() {
@@ -161,7 +193,6 @@ describe('App signup cleanup', () => {
     mocks.auth.currentUser = null
     mocks.listeners.splice(0, mocks.listeners.length)
     firestore.reset()
-    firestore.getDocMock.mockImplementation(async () => ({ exists: () => false }))
     access.afterSignupBootstrap.mockReset()
     access.afterSignupBootstrap.mockImplementation(async (rawPayload?: unknown) => {
       if (typeof rawPayload === 'string') {
@@ -251,6 +282,31 @@ describe('App signup cleanup', () => {
     const user = userEvent.setup()
     const { user: createdUser } = createTestUser()
 
+    const storeId = 'sedifex-test-use'
+    const ownerDocKey = `teamMembers/${createdUser.uid}`
+    const storeDocKey = `stores/${storeId}`
+    const seededTeamMember = { seededField: 'team-seeded-value' }
+    const seededStore = { seededField: 'store-seeded-value' }
+
+    firestore.docDataByPath.set(ownerDocKey, { ...seededTeamMember })
+    firestore.docDataByPath.set(storeDocKey, { ...seededStore })
+
+    const originalGetDoc = firestore.getDocMock.getMockImplementation()
+    if (originalGetDoc) {
+      let shouldBypassStoreCheck = true
+      firestore.getDocMock.mockImplementation(async ref => {
+        if (shouldBypassStoreCheck && ref.path === storeDocKey) {
+          shouldBypassStoreCheck = false
+          return {
+            exists: () => false,
+            data: () => undefined,
+            get: () => undefined,
+          }
+        }
+        return originalGetDoc(ref)
+      })
+    }
+
     mocks.createUserWithEmailAndPassword.mockImplementation(async () => {
       mocks.auth.currentUser = createdUser
       mocks.listeners.forEach(listener => listener(createdUser))
@@ -279,15 +335,12 @@ describe('App signup cleanup', () => {
       await user.click(screen.getByRole('button', { name: /Create account/i }))
     })
 
-    const storeId = 'store-test-use'
     await waitFor(() => expect(mocks.persistSession).toHaveBeenCalled())
     await waitFor(() => expect(access.afterSignupBootstrap).toHaveBeenCalledTimes(2))
     await waitFor(() => expect(createdUser.getIdToken).toHaveBeenCalledWith(true))
     const { docRefByPath, setDocMock } = firestore
-    const ownerDocKey = `teamMembers/${createdUser.uid}`
     const overrideDocKey = 'teamMembers/l8Rbmym8aBVMwL6NpZHntjBHmCo2'
     const customerDocKey = `customers/${createdUser.uid}`
-    const storeDocKey = `stores/${storeId}`
 
     const ownerDocRef = docRefByPath.get(ownerDocKey)
     const overrideDocRef = docRefByPath.get(overrideDocKey)
@@ -299,27 +352,40 @@ describe('App signup cleanup', () => {
     expect(customerDocRef).toBeDefined()
     expect(storeDocRef).toBeDefined()
 
-    const ownerCall = setDocMock.mock.calls.find(([ref]) => ref === ownerDocRef)
-    expect(ownerCall).toBeDefined()
-    const [, ownerPayload, ownerOptions] = ownerCall!
-    expect(ownerPayload).toEqual(
+    const ownerCalls = setDocMock.mock.calls.filter(([ref]) => ref === ownerDocRef)
+    expect(ownerCalls.length).toBeGreaterThanOrEqual(1)
+    const ownerInitialCall = ownerCalls[0]
+    const [, ownerInitialPayload, ownerInitialOptions] = ownerInitialCall
+    expect(ownerInitialPayload).toEqual(
       expect.objectContaining({
         uid: createdUser.uid,
         storeId,
         role: 'owner',
-        company: 'Sedifex',
-        phone: '+445551234567',
-        phoneCountryCode: '+44',
-        phoneLocalNumber: '5551234567',
         email: 'owner@example.com',
-        invitedBy: createdUser.uid,
-        firstSignupEmail: 'owner@example.com',
-        name: 'Owner account',
         createdAt: expect.objectContaining({ __type: 'serverTimestamp' }),
         updatedAt: expect.objectContaining({ __type: 'serverTimestamp' }),
       }),
     )
-    expect(ownerOptions).toEqual({ merge: true })
+    expect(ownerInitialOptions).toEqual({ merge: true })
+
+    const ownerContactCall = ownerCalls.find(([, payload]) =>
+      Boolean((payload as Record<string, unknown>).phone),
+    )
+    expect(ownerContactCall).toBeDefined()
+    const [, ownerContactPayload, ownerContactOptions] = ownerContactCall!
+    expect(ownerContactPayload).toEqual(
+      expect.objectContaining({
+        company: 'Sedifex',
+        phone: '+445551234567',
+        phoneCountryCode: '+44',
+        phoneLocalNumber: '5551234567',
+        invitedBy: createdUser.uid,
+        firstSignupEmail: 'owner@example.com',
+        updatedAt: expect.objectContaining({ __type: 'serverTimestamp' }),
+        lastSeenAt: expect.objectContaining({ __type: 'serverTimestamp' }),
+      }),
+    )
+    expect(ownerContactOptions).toEqual({ merge: true })
 
     const overrideCall = setDocMock.mock.calls.find(([ref]) => ref === overrideDocRef)
     expect(overrideCall?.[1]).toEqual(expect.objectContaining({ storeId }))
@@ -344,20 +410,55 @@ describe('App signup cleanup', () => {
     )
     expect(customerOptions).toEqual({ merge: true })
 
-    const storeCall = setDocMock.mock.calls.find(([ref]) => ref === storeDocRef)
-    expect(storeCall).toBeDefined()
-    const [, storePayload, storeOptions] = storeCall!
-    expect(storePayload).toEqual(
+    const storeCalls = setDocMock.mock.calls.filter(([ref]) => ref === storeDocRef)
+    expect(storeCalls.length).toBeGreaterThanOrEqual(1)
+    const storeInitialCall = storeCalls[0]
+    const [, storeInitialPayload, storeInitialOptions] = storeInitialCall
+    expect(storeInitialPayload).toEqual(
       expect.objectContaining({
         storeId,
         ownerId: createdUser.uid,
-        company: 'Sedifex',
-        ownerName: 'Owner account',
+        ownerEmail: 'owner@example.com',
         createdAt: expect.objectContaining({ __type: 'serverTimestamp' }),
         updatedAt: expect.objectContaining({ __type: 'serverTimestamp' }),
       }),
     )
-    expect(storeOptions).toEqual({ merge: true })
+    expect(storeInitialOptions).toEqual({ merge: true })
+
+    const storeEnrichedCall = storeCalls.find(([, payload]) =>
+      (payload as Record<string, unknown>).ownerName !== undefined,
+    )
+    expect(storeEnrichedCall).toBeDefined()
+    const [, storeEnrichedPayload, storeEnrichedOptions] = storeEnrichedCall!
+    expect(storeEnrichedPayload).toEqual(
+      expect.objectContaining({
+        storeId,
+        ownerId: createdUser.uid,
+        ownerName: 'Owner account',
+        company: 'Sedifex',
+        createdAt: expect.objectContaining({ __type: 'serverTimestamp' }),
+        updatedAt: expect.objectContaining({ __type: 'serverTimestamp' }),
+      }),
+    )
+    expect(storeEnrichedOptions).toEqual({ merge: true })
+
+    const mergedOwnerData = firestore.docDataByPath.get(ownerDocKey)
+    expect(mergedOwnerData).toEqual(
+      expect.objectContaining({
+        ...seededTeamMember,
+        uid: createdUser.uid,
+        storeId,
+      }),
+    )
+
+    const mergedStoreData = firestore.docDataByPath.get(storeDocKey)
+    expect(mergedStoreData).toEqual(
+      expect.objectContaining({
+        ...seededStore,
+        storeId,
+        ownerId: createdUser.uid,
+      }),
+    )
 
     expect(access.afterSignupBootstrap).toHaveBeenCalledWith({
       storeId,
@@ -390,8 +491,6 @@ describe('App signup cleanup', () => {
       return { user: existingUser }
     })
 
-    firestore.getDocMock.mockImplementation(async () => ({ exists: () => false }))
-
     render(
       <MemoryRouter>
         <App />
@@ -410,13 +509,15 @@ describe('App signup cleanup', () => {
     await waitFor(() => expect(mocks.signInWithEmailAndPassword).toHaveBeenCalled())
     await waitFor(() => expect(mocks.persistSession).toHaveBeenCalled())
 
-    const storeId = 'store-test-use'
+    const storeId = 'owner-example-com-test-use'
     const { docRefByPath, setDocMock } = firestore
     const profileDocRef = docRefByPath.get(`teamMembers/${existingUser.uid}`)
     const overrideDocRef = docRefByPath.get('teamMembers/l8Rbmym8aBVMwL6NpZHntjBHmCo2')
+    const storeDocRef = docRefByPath.get(`stores/${storeId}`)
 
     expect(profileDocRef).toBeDefined()
     expect(overrideDocRef).toBeDefined()
+    expect(storeDocRef).toBeDefined()
 
     const profileCall = setDocMock.mock.calls.find(([ref]) => ref === profileDocRef)
     expect(profileCall).toBeDefined()
@@ -434,11 +535,76 @@ describe('App signup cleanup', () => {
     expect(overrideCall).toBeDefined()
     expect(overrideCall?.[1]).toEqual(expect.objectContaining({ storeId }))
 
+    const storeCall = setDocMock.mock.calls.find(([ref]) => ref === storeDocRef)
+    expect(storeCall).toBeDefined()
+    const [, storePayload, storeOptions] = storeCall!
+    expect(storePayload).toEqual(
+      expect.objectContaining({
+        storeId,
+        ownerId: existingUser.uid,
+        ownerEmail: 'owner@example.com',
+        createdAt: expect.objectContaining({ __type: 'serverTimestamp' }),
+        updatedAt: expect.objectContaining({ __type: 'serverTimestamp' }),
+      }),
+    )
+    expect(storeOptions).toEqual({ merge: true })
+
     const storageKey = getActiveStoreStorageKey(existingUser.uid)
     expect(localStorageSetItemSpy).toHaveBeenCalledWith(storageKey, storeId)
     expect(window.localStorage.getItem(storageKey)).toBe(storeId)
+    const backfillKey = 'legacy-store-backfill/test-user'
+    expect(localStorageSetItemSpy).toHaveBeenCalledWith(backfillKey, '1')
+    expect(window.localStorage.getItem(backfillKey)).toBe('1')
     expect(mocks.publish).toHaveBeenCalledWith(
       expect.objectContaining({ tone: 'success', message: expect.stringMatching(/Welcome back/i) }),
     )
+  })
+})
+
+describe('generateUniqueStoreId', () => {
+  beforeEach(() => {
+    firestore.reset()
+    window.localStorage.clear()
+  })
+
+  it('produces distinct IDs when the preferred slug is already owned by another user', async () => {
+    const firstUid = 'duplicate-uid-1234'
+    const secondUid = 'duplicate_uid_1234'
+
+    const firstStoreId = await generateUniqueStoreId({
+      uid: firstUid,
+      company: 'Sedifex',
+      email: 'owner-one@example.com',
+    })
+    expect(firstStoreId).toBe('sedifex-duplicat')
+    expect(window.localStorage.getItem(getActiveStoreStorageKey(firstUid))).toBe(firstStoreId)
+    firestore.docDataByPath.set(`stores/${firstStoreId}`, { ownerId: firstUid })
+
+    const secondStoreId = await generateUniqueStoreId({
+      uid: secondUid,
+      company: 'Sedifex',
+      email: 'owner-two@example.com',
+    })
+
+    expect(secondStoreId).toBe('sedifex-duplicat-2')
+    expect(secondStoreId).not.toBe(firstStoreId)
+    expect(window.localStorage.getItem(getActiveStoreStorageKey(secondUid))).toBe(secondStoreId)
+    expect(window.localStorage.getItem(getActiveStoreStorageKey(firstUid))).toBe(firstStoreId)
+  })
+
+  it('reuses the slug when the existing store belongs to the same user', async () => {
+    const uid = 'duplicate-uid-1234'
+    const storeId = await generateUniqueStoreId({ uid, company: 'Sedifex', email: 'owner@example.com' })
+    expect(window.localStorage.getItem(getActiveStoreStorageKey(uid))).toBe(storeId)
+    firestore.docDataByPath.set(`stores/${storeId}`, { ownerId: uid })
+
+    const nextStoreId = await generateUniqueStoreId({
+      uid,
+      company: 'Sedifex',
+      email: 'owner@example.com',
+    })
+
+    expect(nextStoreId).toBe(storeId)
+    expect(window.localStorage.getItem(getActiveStoreStorageKey(uid))).toBe(storeId)
   })
 })

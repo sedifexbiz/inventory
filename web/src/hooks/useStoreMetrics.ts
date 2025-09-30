@@ -63,7 +63,7 @@ type CustomerRecord = {
   name: string
   displayName?: string
   createdAt?: Timestamp | Date | null
-  storeId?: string | null
+  storeId: string
   loyalty: CustomerLoyalty
 }
 

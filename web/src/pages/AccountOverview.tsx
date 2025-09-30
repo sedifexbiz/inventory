@@ -13,6 +13,7 @@ import {
 } from 'firebase/firestore'
 import { db } from '../firebase'
 import { useActiveStoreContext } from '../context/ActiveStoreProvider'
+import { useAuthUser } from '../hooks/useAuthUser'
 import { useMemberships, type Membership } from '../hooks/useMemberships'
 import { manageStaffAccount, revokeStaffAccess, updateStoreProfile } from '../controllers/storeController'
 import { useToast } from '../components/ToastProvider'
@@ -155,8 +156,15 @@ function formatTimestamp(timestamp: Timestamp | null) {
 }
 
 export default function AccountOverview() {
-  const { storeId, isLoading: storeLoading, error: storeError, storeChangeToken } =
-    useActiveStoreContext()
+  const {
+    storeId,
+    isLoading: storeLoading,
+    error: storeError,
+    storeChangeToken,
+    setActiveStoreId,
+  } = useActiveStoreContext()
+  const authUser = useAuthUser()
+  const uid = authUser?.uid ?? null
   const membershipsStoreId = storeLoading ? undefined : storeId ?? null
   const {
     memberships,
@@ -192,6 +200,53 @@ export default function AccountOverview() {
   }, [memberships, storeId])
 
   const isOwner = activeMembership?.role === 'owner'
+
+  useEffect(() => {
+    if (storeId || storeLoading || !uid) {
+      return
+    }
+
+    let cancelled = false
+
+    ;(async () => {
+      try {
+        const memberSnapshot = await getDoc(doc(db, 'teamMembers', uid))
+        if (cancelled) return
+
+        if (!memberSnapshot.exists()) {
+          return
+        }
+
+        const data = memberSnapshot.data() as { storeId?: unknown } | undefined
+        const documentStoreId =
+          typeof data?.storeId === 'string' && data.storeId.trim().length > 0
+            ? data.storeId.trim()
+            : null
+
+        if (!documentStoreId) {
+          return
+        }
+
+        if (typeof window !== 'undefined') {
+          try {
+            window.localStorage.setItem('activeStoreId', documentStoreId)
+          } catch (storageError) {
+            console.warn('Unable to persist active store selection', storageError)
+          }
+        }
+
+        setActiveStoreId(documentStoreId)
+      } catch (error) {
+        if (!cancelled) {
+          console.error('Failed to load workspace access for member', error)
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [storeId, storeLoading, uid, setActiveStoreId])
 
   useEffect(() => {
     if (!storeId) {
@@ -468,11 +523,20 @@ export default function AccountOverview() {
     return <div role="alert">{storeError}</div>
   }
 
-  if (!storeId && !storeLoading) {
+  if (!storeId) {
+    if (storeLoading) {
+      return (
+        <div className="account-overview" role="status">
+          <h1>Account overview</h1>
+          <p>Loading account details…</p>
+        </div>
+      )
+    }
+
     return (
       <div className="account-overview" role="status">
         <h1>Account overview</h1>
-        <p>Select a workspace to view account details.</p>
+        <p>Select a workspace…</p>
       </div>
     )
   }

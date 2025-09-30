@@ -276,6 +276,22 @@ export default function CloseDay() {
 
 
 
+  const workspaceEmptyState = (
+    <div className="empty-state">
+      <h3 className="empty-state__title">Select a workspace…</h3>
+      <p>Choose a workspace from the switcher above to continue.</p>
+    </div>
+  )
+
+  if (!activeStoreId) {
+    return (
+      <div className="print-summary" style={{ maxWidth: 760 }}>
+        <h2 style={{ color: '#4338CA' }}>Close Day</h2>
+        {workspaceEmptyState}
+      </div>
+    )
+  }
+
   return (
     <div className="print-summary" style={{ maxWidth: 760 }}>
       <h2 style={{ color: '#4338CA' }}>Close Day</h2>

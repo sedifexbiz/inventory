@@ -19,6 +19,7 @@ import {
   refreshSessionHeartbeat,
 } from './controllers/sessionController'
 import { afterSignupBootstrap } from './controllers/accessController'
+import { createInitialOwnerAndStore, generateUniqueStoreId } from './controllers/onboarding'
 import { AuthUserContext } from './hooks/useAuthUser'
 import {
   clearActiveStoreIdForUser,
@@ -27,10 +28,10 @@ import {
 } from './utils/activeStoreStorage'
 import { getOnboardingStatus, setOnboardingStatus } from './utils/onboarding'
 import type { QueueRequestType } from './utils/offlineQueue'
+import { OVERRIDE_TEAM_MEMBER_DOC_ID } from './config/teamMembers'
 
 /* ------------------------------ config ------------------------------ */
-/** If you want to ALSO mirror the team member to a fixed doc id, put it here. */
-const OVERRIDE_MEMBER_DOC_ID = 'l8Rbmym8aBVMwL6NpZHntjBHmCo2' // set '' to disable
+const LEGACY_STORE_BACKFILL_KEY_PREFIX = 'legacy-store-backfill/'
 
 /* ------------------------------ constants ------------------------------ */
 
@@ -88,10 +89,76 @@ function resolveOwnerName(user: User): string {
   const displayName = user.displayName?.trim()
   return displayName && displayName.length > 0 ? displayName : OWNER_NAME_FALLBACK
 }
-function generateStoreId(uid: string) {
-  return `store-${uid.slice(0, 8)}`
+
+type ServerTimestampSentinel = ReturnType<typeof serverTimestamp>
+
+function getLegacyStoreBackfillKey(uid: string): string {
+  return `${LEGACY_STORE_BACKFILL_KEY_PREFIX}${uid}`
 }
 
+function hasCompletedLegacyStoreBackfill(uid: string): boolean {
+  if (typeof window === 'undefined') {
+    return true
+  }
+  try {
+    return window.localStorage.getItem(getLegacyStoreBackfillKey(uid)) === '1'
+  } catch (error) {
+    console.warn('[store] Failed to inspect legacy store backfill flag', error)
+    return true
+  }
+}
+
+function markLegacyStoreBackfillComplete(uid: string) {
+  if (typeof window === 'undefined') {
+    return
+  }
+  try {
+    window.localStorage.setItem(getLegacyStoreBackfillKey(uid), '1')
+  } catch (error) {
+    console.warn('[store] Failed to persist legacy store backfill flag', error)
+  }
+}
+
+function shouldAttemptLegacyStoreBackfill(uid: string): boolean {
+  return Boolean(uid) && !hasCompletedLegacyStoreBackfill(uid)
+}
+
+async function ensureLegacyStoreDoc(params: {
+  storeId: string
+  user: User
+  timestamp: ServerTimestampSentinel
+}) {
+  const { storeId, user, timestamp } = params
+  if (!storeId || !user.uid || !shouldAttemptLegacyStoreBackfill(user.uid)) {
+    return
+  }
+
+  let shouldMarkCompletion = false
+  try {
+    const storeRef = doc(db, 'stores', storeId)
+    const snapshot = await getDoc(storeRef)
+    if (!snapshot.exists()) {
+      await setDoc(
+        storeRef,
+        {
+          storeId,
+          ownerId: user.uid,
+          ownerEmail: user.email ?? null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+        { merge: true },
+      )
+    }
+    shouldMarkCompletion = true
+  } catch (error) {
+    console.warn(`[store] Failed to backfill legacy store doc for "${storeId}"`, error)
+  }
+
+  if (shouldMarkCompletion) {
+    markLegacyStoreBackfillComplete(user.uid)
+  }
+}
 /** Ensure teamMembers/{uid} exists; optionally mirror to fixed ID. */
 async function upsertTeamMemberDocs(params: {
   user: User
@@ -123,9 +190,9 @@ async function upsertTeamMemberDocs(params: {
         await setDoc(uidRef, { lastSeenAt }, { merge: true })
         persistActiveStoreId(existingStoreId, user.uid)
         // Optionally mirror to fixed doc for your analytics/admin
-        if (OVERRIDE_MEMBER_DOC_ID) {
+        if (OVERRIDE_TEAM_MEMBER_DOC_ID) {
           await setDoc(
-            doc(db, 'teamMembers', OVERRIDE_MEMBER_DOC_ID),
+            doc(db, 'teamMembers', OVERRIDE_TEAM_MEMBER_DOC_ID),
             { ...snap.data(), lastSeenAt, updatedAt: serverTimestamp() },
             { merge: true },
           )
@@ -135,7 +202,11 @@ async function upsertTeamMemberDocs(params: {
     }
   }
 
-  const storeId = generateStoreId(user.uid)
+  const storeId = await generateUniqueStoreId({
+    uid: user.uid,
+    company,
+    email: user.email ?? null,
+  })
   const timestamp = serverTimestamp()
   const payload = {
     uid: user.uid,
@@ -156,9 +227,11 @@ async function upsertTeamMemberDocs(params: {
 
   await setDoc(uidRef, payload, { merge: true })
 
-  if (OVERRIDE_MEMBER_DOC_ID) {
-    await setDoc(doc(db, 'teamMembers', OVERRIDE_MEMBER_DOC_ID), payload, { merge: true })
+  if (OVERRIDE_TEAM_MEMBER_DOC_ID) {
+    await setDoc(doc(db, 'teamMembers', OVERRIDE_TEAM_MEMBER_DOC_ID), payload, { merge: true })
   }
+
+  await ensureLegacyStoreDoc({ storeId, user, timestamp })
 
   persistActiveStoreId(storeId, user.uid)
   return { storeId, role }
@@ -254,7 +327,7 @@ export default function App() {
   const [confirmPassword, setConfirmPassword] = useState('')
 
   // new fields
-  const [role, setRole] = useState<'owner' | 'staff'>('staff')
+  const [role, setRole] = useState<'owner' | 'staff'>('owner')
   const [company, setCompany] = useState('')
 
   const [countryCode, setCountryCode] = useState(DEFAULT_COUNTRY_CODE)
@@ -437,18 +510,50 @@ export default function App() {
         const { user: nextUser } = await createUserWithEmailAndPassword(auth, sanitizedEmail, sanitizedPassword)
         await persistSession(nextUser)
 
-        // Create team member with selected role + company; auto storeId
-        const { storeId } = await upsertTeamMemberDocs({
+        // Create team member + store record and refresh auth token before continuing
+        const storeId = await createInitialOwnerAndStore({
           user: nextUser,
           role,
           company: sanitizedCompany,
-          phone: sanitizedPhone,
-          phoneCountryCode: phoneDetails.countryCode || null,
-          phoneLocalNumber: phoneDetails.localNumber || null,
-          preferExisting: false,
+          email: sanitizedEmail,
         })
 
+        try {
+          await nextUser.getIdToken(true)
+        } catch (error) {
+          console.warn('[auth] Unable to refresh ID token after signup', error)
+        }
+
         const ownerName = resolveOwnerName(nextUser)
+        const activityTimestamp = serverTimestamp()
+        const teamMemberContactPayload = {
+          phone: sanitizedPhone || null,
+          phoneCountryCode: phoneDetails.countryCode || null,
+          phoneLocalNumber: phoneDetails.localNumber || null,
+          firstSignupEmail: (nextUser.email ?? '').toLowerCase() || null,
+          company: sanitizedCompany || null,
+          invitedBy: nextUser.uid,
+          lastSeenAt: activityTimestamp,
+          updatedAt: activityTimestamp,
+        }
+
+        await setDoc(doc(db, 'teamMembers', nextUser.uid), teamMemberContactPayload, { merge: true })
+
+        if (OVERRIDE_TEAM_MEMBER_DOC_ID) {
+          await setDoc(
+            doc(db, 'teamMembers', OVERRIDE_TEAM_MEMBER_DOC_ID),
+            {
+              ...teamMemberContactPayload,
+              uid: nextUser.uid,
+              storeId,
+              role,
+              email: nextUser.email ?? null,
+              name: ownerName,
+            },
+            { merge: true },
+          )
+        }
+
         await afterSignupBootstrap({
           storeId,
           contact: {
@@ -466,7 +571,6 @@ export default function App() {
 
         await afterSignupBootstrap(storeId)
 
-        try { await nextUser.getIdToken(true) } catch {}
         setOnboardingStatus(nextUser.uid, 'pending')
       }
 
@@ -478,6 +582,7 @@ export default function App() {
       setConfirmPassword('')
       setPhone('')
       setCompany('')
+      setRole('owner')
       setNormalizedPhone('')
       setCountryCode(DEFAULT_COUNTRY_CODE)
 
@@ -499,6 +604,7 @@ export default function App() {
     setConfirmPassword('')
     setPhone('')
     setCompany('')
+    setRole('owner')
     setNormalizedPhone('')
     setCountryCode(DEFAULT_COUNTRY_CODE)
   }

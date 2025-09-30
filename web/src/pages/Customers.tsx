@@ -38,6 +38,7 @@ import { parseCsv } from '../utils/csv'
 type Customer = {
   id: string
   name: string
+  storeId: string
   displayName?: string
   phone?: string
   email?: string
@@ -831,19 +832,39 @@ export default function Customers() {
     { id: 'untagged', label: 'Untagged' },
   ]
 
+  const workspaceEmptyState = (
+    <div className="empty-state">
+      <h3 className="empty-state__title">Select a workspace…</h3>
+      <p>Choose a workspace from the switcher above to continue.</p>
+    </div>
+  )
+
+  const pageHeader = (
+    <header className="page__header">
+      <div>
+        <h2 className="page__title">Customers</h2>
+        <p className="page__subtitle">
+          Keep a tidy record of your regulars and speed up checkout on the sales floor.
+        </p>
+      </div>
+      <span className="customers-page__badge" aria-live="polite">
+        {customers.length} saved • {totalShown} shown
+      </span>
+    </header>
+  )
+
+  if (!activeStoreId) {
+    return (
+      <div className="page customers-page">
+        {pageHeader}
+        <section className="card">{workspaceEmptyState}</section>
+      </div>
+    )
+  }
+
   return (
     <div className="page customers-page">
-      <header className="page__header">
-        <div>
-          <h2 className="page__title">Customers</h2>
-          <p className="page__subtitle">
-            Keep a tidy record of your regulars and speed up checkout on the sales floor.
-          </p>
-        </div>
-        <span className="customers-page__badge" aria-live="polite">
-          {customers.length} saved • {totalShown} shown
-        </span>
-      </header>
+      {pageHeader}
 
       <div className="customers-page__grid">
         <section className="card" aria-label="Add a customer">

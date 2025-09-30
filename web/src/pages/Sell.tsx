@@ -42,6 +42,7 @@ type CartLine = { productId: string; name: string; price: number; qty: number }
 type Customer = {
   id: string
   name: string
+  storeId: string
   displayName?: string
   phone?: string
   email?: string
@@ -692,6 +693,7 @@ export default function Sell() {
             data: {
               stockCount: nextStock,
               updatedAt: timestamp,
+              storeId: activeStoreId,
             },
           })
 
@@ -748,12 +750,14 @@ export default function Sell() {
 
           if (customerExists) {
             transaction.update(customerRef, {
+              storeId: activeStoreId,
               'loyalty.lastVisitAt': timestamp,
               'loyalty.points': nextPoints,
               updatedAt: timestamp,
             })
           } else {
             transaction.set(customerRef, {
+              storeId: activeStoreId,
               loyalty: {
                 points: nextPoints,
                 lastVisitAt: timestamp,
@@ -793,18 +797,38 @@ export default function Sell() {
 
   const filtered = products.filter(p => p.name.toLowerCase().includes(queryText.toLowerCase()))
 
+  const workspaceEmptyState = (
+    <div className="empty-state">
+      <h3 className="empty-state__title">Select a workspace…</h3>
+      <p>Choose a workspace from the switcher above to continue.</p>
+    </div>
+  )
+
+  const pageHeader = (
+    <header className="page__header">
+      <div>
+        <h2 className="page__title">Sell</h2>
+        <p className="page__subtitle">Build a cart from your product list and record the sale in seconds.</p>
+      </div>
+      <div className="sell-page__total" aria-live="polite">
+        <span className="sell-page__total-label">Subtotal</span>
+        <span className="sell-page__total-value">{formatCurrency(subtotal)}</span>
+      </div>
+    </header>
+  )
+
+  if (!activeStoreId) {
+    return (
+      <div className="page sell-page">
+        {pageHeader}
+        <section className="card">{workspaceEmptyState}</section>
+      </div>
+    )
+  }
+
   return (
     <div className="page sell-page">
-      <header className="page__header">
-        <div>
-          <h2 className="page__title">Sell</h2>
-          <p className="page__subtitle">Build a cart from your product list and record the sale in seconds.</p>
-        </div>
-        <div className="sell-page__total" aria-live="polite">
-          <span className="sell-page__total-label">Subtotal</span>
-          <span className="sell-page__total-value">{formatCurrency(subtotal)}</span>
-        </div>
-      </header>
+      {pageHeader}
 
       <section className="card">
         <div className="field">

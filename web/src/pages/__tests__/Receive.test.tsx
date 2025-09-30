@@ -132,7 +132,7 @@ describe('Receive', () => {
     await waitFor(() =>
       expect(queueCallableRequestMock).toHaveBeenCalledWith(
         FIREBASE_CALLABLES.RECEIVE_STOCK,
-        expect.objectContaining({ productId: 'prod-1', qty: 5 }),
+        expect.objectContaining({ productId: 'prod-1', qty: 5, storeId: 'store-123' }),
         'receipt',
       ),
     )
@@ -160,7 +160,7 @@ describe('Receive', () => {
     await waitFor(() =>
       expect(queueCallableRequestMock).toHaveBeenCalledWith(
         FIREBASE_CALLABLES.RECEIVE_STOCK,
-        expect.objectContaining({ productId: 'prod-1', qty: 5 }),
+        expect.objectContaining({ productId: 'prod-1', qty: 5, storeId: 'store-123' }),
         'receipt',
       ),
     )

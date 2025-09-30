@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { DEFAULT_CURRENCY_SYMBOL } from '@shared/currency'
 
 import Sparkline from '../components/Sparkline'
+import { useActiveStoreContext } from '../context/ActiveStoreProvider'
 import { useStoreMetrics } from '../hooks/useStoreMetrics'
 
 const QUICK_LINKS: Array<{
@@ -43,6 +44,7 @@ function formatPercent(value: number) {
 }
 
 export default function Dashboard() {
+  const { storeId, isLoading: storeLoading } = useActiveStoreContext()
   const {
     rangePresets,
     selectedRangeId,
@@ -65,6 +67,24 @@ export default function Dashboard() {
     inventoryAlerts,
     teamCallouts,
   } = useStoreMetrics()
+
+  if (storeLoading) {
+    return (
+      <div>
+        <h2 style={{ color: '#4338CA', marginBottom: 8 }}>Dashboard</h2>
+        <p style={{ color: '#475569' }}>Loading your workspace…</p>
+      </div>
+    )
+  }
+
+  if (!storeId) {
+    return (
+      <div>
+        <h2 style={{ color: '#4338CA', marginBottom: 8 }}>Dashboard</h2>
+        <p style={{ color: '#475569' }}>Select a workspace to see your dashboard.</p>
+      </div>
+    )
+  }
 
   return (
     <div>

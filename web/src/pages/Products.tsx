@@ -742,20 +742,40 @@ export default function Products() {
     )
   }
 
+  const workspaceEmptyState = (
+    <div className="empty-state">
+      <h3 className="empty-state__title">Select a workspace…</h3>
+      <p>Choose a workspace from the switcher above to continue.</p>
+    </div>
+  )
+
+  const pageHeader = (
+    <header className="page__header">
+      <div>
+        <h2 className="page__title">Products</h2>
+        <p className="page__subtitle">
+          Review inventory, monitor low stock alerts, and keep your catalogue tidy.
+        </p>
+      </div>
+      <Link to="/receive" className="products-page__receive-link">
+        Receive stock
+      </Link>
+    </header>
+  )
+
+  if (!activeStoreId) {
+    return (
+      <div className="page products-page">
+        {pageHeader}
+        <section className="card products-page__card">{workspaceEmptyState}</section>
+      </div>
+    )
+  }
+
 
   return (
     <div className="page products-page">
-      <header className="page__header">
-        <div>
-          <h2 className="page__title">Products</h2>
-          <p className="page__subtitle">
-            Review inventory, monitor low stock alerts, and keep your catalogue tidy.
-          </p>
-        </div>
-        <Link to="/receive" className="products-page__receive-link">
-          Receive stock
-        </Link>
-      </header>
+      {pageHeader}
 
       <section className="card products-page__card">
         <div className="products-page__toolbar">

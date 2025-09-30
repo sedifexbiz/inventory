@@ -1,7 +1,10 @@
 import { createContext, ReactNode, useContext } from 'react'
+
 import { useActiveStore } from '../hooks/useActiveStore'
 
-const ActiveStoreContext = createContext<ReturnType<typeof useActiveStore> | undefined>(undefined)
+type ActiveStoreContextValue = ReturnType<typeof useActiveStore>
+
+const ActiveStoreContext = createContext<ActiveStoreContextValue | undefined>(undefined)
 
 interface ActiveStoreProviderProps {
   children: ReactNode

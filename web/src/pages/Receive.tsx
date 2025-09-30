@@ -215,6 +215,7 @@ export default function Receive() {
       supplier: supplierName,
       reference: referenceNumber,
       unitCost: parsedCost,
+      storeId: activeStoreId,
     }
 
     try {
@@ -274,14 +275,34 @@ export default function Receive() {
 
 
 
+  const workspaceEmptyState = (
+    <div className="empty-state">
+      <h3 className="empty-state__title">Select a workspace…</h3>
+      <p>Choose a workspace from the switcher above to continue.</p>
+    </div>
+  )
+
+  const pageHeader = (
+    <header className="page__header">
+      <div>
+        <h2 className="page__title">Receive stock</h2>
+        <p className="page__subtitle">Log deliveries against your Firestore inventory so shelves stay replenished.</p>
+      </div>
+    </header>
+  )
+
+  if (!activeStoreId) {
+    return (
+      <div className="page receive-page">
+        {pageHeader}
+        <section className="card receive-page__card">{workspaceEmptyState}</section>
+      </div>
+    )
+  }
+
   return (
     <div className="page receive-page">
-      <header className="page__header">
-        <div>
-          <h2 className="page__title">Receive stock</h2>
-          <p className="page__subtitle">Log deliveries against your Firestore inventory so shelves stay replenished.</p>
-        </div>
-      </header>
+      {pageHeader}
 
       <section className="card receive-page__card">
         <div className="receive-page__form">

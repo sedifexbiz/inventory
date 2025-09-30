@@ -5,17 +5,34 @@ function hasWindow(): boolean {
   return typeof window !== 'undefined'
 }
 
+function normalizeUid(uid: string | null | undefined): string | null {
+  if (typeof uid !== 'string') {
+    return null
+  }
+  const trimmed = uid.trim()
+  return trimmed.length > 0 ? trimmed : null
+}
+
+function normalizeStoreId(storeId: string | null | undefined): string | null {
+  if (typeof storeId !== 'string') {
+    return null
+  }
+  const trimmed = storeId.trim()
+  return trimmed.length > 0 ? trimmed : null
+}
+
 export function getActiveStoreStorageKey(uid: string): string {
   return `${ACTIVE_STORE_STORAGE_PREFIX}${uid}`
 }
 
 export function readActiveStoreId(uid: string | null | undefined): string | null {
-  if (!uid || !hasWindow()) {
+  const normalizedUid = normalizeUid(uid)
+  if (!normalizedUid || !hasWindow()) {
     return null
   }
 
   try {
-    const value = window.localStorage.getItem(getActiveStoreStorageKey(uid))
+    const value = window.localStorage.getItem(getActiveStoreStorageKey(normalizedUid))
     return value && value.trim() ? value.trim() : null
   } catch {
     return null
@@ -23,12 +40,14 @@ export function readActiveStoreId(uid: string | null | undefined): string | null
 }
 
 export function persistActiveStoreIdForUser(uid: string | null | undefined, storeId: string | null | undefined) {
-  if (!uid || !storeId || !hasWindow()) {
+  const normalizedUid = normalizeUid(uid)
+  const normalizedStoreId = normalizeStoreId(storeId)
+  if (!normalizedUid || !normalizedStoreId || !hasWindow()) {
     return
   }
 
   try {
-    window.localStorage.setItem(getActiveStoreStorageKey(uid), storeId)
+    window.localStorage.setItem(getActiveStoreStorageKey(normalizedUid), normalizedStoreId)
     window.localStorage.removeItem(LEGACY_ACTIVE_STORE_STORAGE_KEY)
   } catch {
     /* noop */
@@ -36,12 +55,13 @@ export function persistActiveStoreIdForUser(uid: string | null | undefined, stor
 }
 
 export function clearActiveStoreIdForUser(uid: string | null | undefined) {
-  if (!uid || !hasWindow()) {
+  const normalizedUid = normalizeUid(uid)
+  if (!normalizedUid || !hasWindow()) {
     return
   }
 
   try {
-    window.localStorage.removeItem(getActiveStoreStorageKey(uid))
+    window.localStorage.removeItem(getActiveStoreStorageKey(normalizedUid))
   } catch {
     /* noop */
   }

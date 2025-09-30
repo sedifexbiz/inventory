@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { onAuthStateChanged, signOut, type User } from 'firebase/auth'
 import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore'
 import { auth, db } from './firebase'
+import { OVERRIDE_TEAM_MEMBER_DOC_ID } from './config/teamMembers'
 import { clearActiveStoreIdForUser, persistActiveStoreIdForUser } from './utils/activeStoreStorage'
 
 type TeamMemberSnapshot = {
@@ -46,6 +47,14 @@ async function loadTeamMember(user: User): Promise<TeamMemberSnapshot> {
 
   if (uidSnapshot.exists()) {
     return snapshotFromData(uidSnapshot.data())
+  }
+
+  if (OVERRIDE_TEAM_MEMBER_DOC_ID) {
+    const overrideRef = doc(db, 'teamMembers', OVERRIDE_TEAM_MEMBER_DOC_ID)
+    const overrideSnapshot = await getDoc(overrideRef)
+    if (overrideSnapshot.exists()) {
+      return snapshotFromData(overrideSnapshot.data())
+    }
   }
 
   const email = normalizeString(user.email)
