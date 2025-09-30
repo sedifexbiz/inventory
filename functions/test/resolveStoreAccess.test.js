@@ -22,7 +22,8 @@ Module._load = function patchedLoad(request, parent, isMain) {
   if (request === 'firebase-admin') {
     const firestore = () => currentDefaultDb
     firestore.FieldValue = {
-      serverTimestamp: () => ({ __mockServerTimestamp: true }),
+      serverTimestamp: () => MockTimestamp.now(),
+      increment: amount => ({ __mockIncrement: amount }),
     }
     firestore.Timestamp = MockTimestamp
 

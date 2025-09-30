@@ -6,10 +6,10 @@
     "node": "20"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node ./scripts/postbuild.js",
     "serve": "firebase emulators:start --only functions,firestore",
     "deploy": "npm run build && firebase deploy --only functions",
-    "test": "npm run build && node ./test/resolveStoreAccess.test.js",
+    "test": "npm run build && node ./test/resolveStoreAccess.test.js && node ./test/dailySummaries.test.js && node ./test/callablesLogging.test.js && node ./test/updateStoreProfile.test.js && node ./test/revokeStaffAccess.test.js && node ./test/nightlyDataHygiene.test.js",
     "backfill-store": "ts-node ./scripts/backfillStoreIds.ts"
   },
   "dependencies": {

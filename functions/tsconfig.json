@@ -12,6 +12,9 @@
   },
   "compileOnSave": true,
   "include": [
-    "src"
+    "src",
+
+    "../shared"
+
   ]
 }
