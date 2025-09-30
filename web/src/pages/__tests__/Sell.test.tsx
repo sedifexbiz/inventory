@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 
+import { formatCurrency } from '@shared/currency'
 import Sell from '../Sell'
 
 const mockLoadCachedProducts = vi.fn(async () => [] as unknown[])
@@ -23,7 +24,7 @@ vi.mock('../../utils/offlineCache', () => ({
 }))
 
 vi.mock('../../utils/pdf', () => ({
-  buildSimplePdf: vi.fn(async () => ({ blob: new Blob(), url: 'blob:test' })),
+  buildSimplePdf: vi.fn(() => new Uint8Array([0, 1, 2, 3])),
 }))
 
 vi.mock('../../firebase', () => ({
@@ -35,7 +36,15 @@ vi.mock('../../hooks/useAuthUser', () => ({
   useAuthUser: () => mockUseAuthUser(),
 }))
 
-const mockUseActiveStoreContext = vi.fn(() => ({ storeId: 'store-1', isLoading: false, error: null }))
+const mockUseActiveStoreContext = vi.fn(() => ({
+  storeId: 'store-1',
+  isLoading: false,
+  error: null,
+  memberships: [],
+  membershipsLoading: false,
+  setActiveStoreId: vi.fn(),
+  storeChangeToken: 0,
+}))
 vi.mock('../../context/ActiveStoreProvider', () => ({
   useActiveStoreContext: () => mockUseActiveStoreContext(),
 }))
@@ -64,11 +73,21 @@ const onSnapshotMock = vi.fn(
     return () => {}
   },
 )
-const docMock = vi.fn((collectionRef: { path: string }, id?: string) => ({
-  type: 'doc',
-  path: id ? `${collectionRef.path}/${id}` : `${collectionRef.path}/auto-id`,
-  id: id ?? 'auto-id',
-}))
+const docMock = vi.fn((...args: unknown[]) => {
+  if (args.length === 1) {
+    const [collectionRef] = args as [{ path: string }]
+    return { type: 'doc', path: `${collectionRef.path}/auto-id`, id: 'auto-id' }
+  }
+  if (args.length === 2) {
+    const [collectionRef, id] = args as [{ path: string }, string]
+    return { type: 'doc', path: `${collectionRef.path}/${id}`, id }
+  }
+  if (args.length === 3) {
+    const [, collectionPath, id] = args as [unknown, string, string]
+    return { type: 'doc', path: `${collectionPath}/${id}`, id }
+  }
+  throw new Error('Unexpected doc invocation in test')
+})
 const runTransactionMock = vi.fn(async () => {})
 const serverTimestampMock = vi.fn(() => 'server-timestamp')
 
@@ -110,10 +129,20 @@ describe('Sell page barcode scanner', () => {
     onSnapshotMock.mockClear()
     whereMock.mockClear()
     docMock.mockClear()
+    runTransactionMock.mockReset()
+    runTransactionMock.mockImplementation(async () => {})
     mockUseAuthUser.mockReset()
     mockUseAuthUser.mockReturnValue({ uid: 'user-1', email: 'cashier@example.com' })
     mockUseActiveStoreContext.mockReset()
-    mockUseActiveStoreContext.mockReturnValue({ storeId: 'store-1', isLoading: false, error: null })
+    mockUseActiveStoreContext.mockReturnValue({
+      storeId: 'store-1',
+      isLoading: false,
+      error: null,
+      memberships: [],
+      membershipsLoading: false,
+      setActiveStoreId: vi.fn(),
+      storeChangeToken: 0,
+    })
 
     mockLoadCachedProducts.mockResolvedValue([])
     mockLoadCachedCustomers.mockResolvedValue([])
@@ -126,6 +155,15 @@ describe('Sell page barcode scanner', () => {
       })
       return () => {}
     })
+
+    if (typeof URL.createObjectURL !== 'function') {
+      // @ts-expect-error - jsdom does not implement createObjectURL
+      URL.createObjectURL = vi.fn(() => 'blob:mock-url')
+    }
+    if (typeof URL.revokeObjectURL !== 'function') {
+      // @ts-expect-error - jsdom does not implement revokeObjectURL
+      URL.revokeObjectURL = vi.fn()
+    }
   })
 
   it('adds a matching product to the cart when a barcode is scanned', async () => {
@@ -172,7 +210,7 @@ describe('Sell page barcode scanner', () => {
       const rows = within(cart).getAllByRole('row')
       expect(rows).toHaveLength(2)
       expect(within(rows[1]).getByText('Test Product')).toBeInTheDocument()
-      expect(within(rows[1]).getByText(/GHS 10\.00/)).toBeInTheDocument()
+      expect(within(rows[1]).getByText(formatCurrency(10))).toBeInTheDocument()
     })
   })
 
@@ -248,7 +286,100 @@ describe('Sell page barcode scanner', () => {
       const rows = within(cart).getAllByRole('row')
       expect(rows).toHaveLength(2)
       expect(within(rows[1]).getByText('Test Product')).toBeInTheDocument()
-      expect(within(rows[1]).getByText(/GHS 7\.00/)).toBeInTheDocument()
+      expect(within(rows[1]).getByText(formatCurrency(7))).toBeInTheDocument()
     })
+  })
+
+  it('updates customer loyalty when recording a sale', async () => {
+    const user = userEvent.setup()
+
+    const customerDoc = {
+      id: 'customer-1',
+      data: () => ({
+        name: 'Loyal Customer',
+        loyalty: { points: 7, lastVisitAt: null },
+        storeId: 'store-1',
+      }),
+    }
+
+    onSnapshotMock.mockImplementation((queryRef, onNext) => {
+      queueMicrotask(() => {
+        if (queryRef.collection.path === 'products') {
+          onNext({ docs: [createProductDoc('product-1', { price: 10, stockCount: 5 })] })
+        } else if (queryRef.collection.path === 'customers') {
+          onNext({ docs: [customerDoc] })
+        } else {
+          onNext({ docs: [] })
+        }
+      })
+      return () => {}
+    })
+
+    const sets: Array<{ ref: { path: string }; data: Record<string, unknown> }> = []
+    const updates: Array<{ ref: { path: string }; data: Record<string, unknown> }> = []
+
+    runTransactionMock.mockImplementation(async (_db, updater: unknown) => {
+      if (typeof updater !== 'function') return
+      await (updater as (transaction: unknown) => Promise<void> | void)({
+        async get(ref: { path: string }) {
+          if (ref.path.startsWith('sales/')) {
+            return { exists: () => false }
+          }
+          if (ref.path === 'products/product-1') {
+            return {
+              exists: () => true,
+              get: (field: string) => (field === 'stockCount' ? 5 : undefined),
+              data: { stockCount: 5 },
+            }
+          }
+          if (ref.path === 'customers/customer-1') {
+            return {
+              exists: () => true,
+              data: () => ({ loyalty: { points: 7, lastVisitAt: null } }),
+            }
+          }
+          return { exists: () => false, data: () => ({}) }
+        },
+        set(ref: { path: string }, data: Record<string, unknown>) {
+          sets.push({ ref, data })
+        },
+        update(ref: { path: string }, data: Record<string, unknown>) {
+          updates.push({ ref, data })
+        },
+      })
+    })
+
+    render(
+      <MemoryRouter>
+        <Sell />
+      </MemoryRouter>,
+    )
+
+    const addButton = await screen.findByRole('button', { name: /Test Product/i })
+    await user.click(addButton)
+
+    const cashInput = await screen.findByLabelText(/Cash received/i)
+    await user.clear(cashInput)
+    await user.type(cashInput, '10')
+
+    const customerSelect = screen.getByLabelText('Customer')
+    await user.selectOptions(customerSelect, 'customer-1')
+
+    const recordButton = screen.getByRole('button', { name: /Record sale/i })
+    await user.click(recordButton)
+
+    await waitFor(() => {
+      expect(runTransactionMock).toHaveBeenCalled()
+      const customerUpdate = updates.find(entry => entry.ref.path === 'customers/customer-1')
+      expect(customerUpdate).toBeTruthy()
+    })
+
+    const customerUpdate = updates.find(entry => entry.ref.path === 'customers/customer-1')!
+    expect(customerUpdate.data).toMatchObject({
+      'loyalty.lastVisitAt': 'server-timestamp',
+      'loyalty.points': 7,
+      updatedAt: 'server-timestamp',
+    })
+    expect(sets.find(entry => entry.ref.path === 'customers/customer-1')).toBeFalsy()
   })
 })

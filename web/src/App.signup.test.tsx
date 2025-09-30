@@ -3,6 +3,7 @@ import type { User } from 'firebase/auth'
 import { MemoryRouter } from 'react-router-dom'
 import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { getActiveStoreStorageKey } from './utils/activeStoreStorage'
 
 /** ---------------- hoisted state/mocks ---------------- */
 const mocks = vi.hoisted(() => {
@@ -21,6 +22,7 @@ const mocks = vi.hoisted(() => {
     persistSession: vi.fn(async () => {}),
     refreshSessionHeartbeat: vi.fn(async () => {}),
     publish: vi.fn(),
+    afterSignupBootstrap: vi.fn(async () => {}),
   }
   return state
 })
@@ -65,10 +67,15 @@ const firestore = vi.hoisted(() => {
   }
 })
 
+const access = vi.hoisted(() => ({
+  afterSignupBootstrap: vi.fn(),
+}))
+
 /** ---------------- module mocks ---------------- */
 vi.mock('./firebase', () => ({
   auth: mocks.auth,
   db: {},
+  functions: {},
 }))
 
 vi.mock('firebase/auth', () => ({
@@ -113,9 +120,23 @@ vi.mock('./controllers/sessionController', async () => {
   }
 })
 
+vi.mock('./controllers/accessController', () => ({
+  afterSignupBootstrap: (...args: unknown[]) => mocks.afterSignupBootstrap(...args),
+}))
+
 vi.mock('./components/ToastProvider', () => ({
   useToast: () => ({ publish: mocks.publish }),
 }))
+
+vi.mock('./controllers/accessController', async () => {
+  const actual = await vi.importActual<typeof import('./controllers/accessController')>(
+    './controllers/accessController',
+  )
+  return {
+    ...actual,
+    afterSignupBootstrap: (...args: unknown[]) => access.afterSignupBootstrap(...args),
+  }
+})
 
 /** ---------------- imports after mocks ---------------- */
 import App from './App'
@@ -127,7 +148,7 @@ function createTestUser() {
     uid: 'test-user',
     email: 'owner@example.com',
     delete: deleteFn,
-    getIdToken: vi.fn(async () => 'token'),
+    getIdToken: vi.fn(async (_force?: boolean) => 'token'),
   } as unknown as User
   return { user: testUser, deleteFn }
 }
@@ -141,6 +162,37 @@ describe('App signup cleanup', () => {
     mocks.listeners.splice(0, mocks.listeners.length)
     firestore.reset()
     firestore.getDocMock.mockImplementation(async () => ({ exists: () => false }))
+    access.afterSignupBootstrap.mockReset()
+    access.afterSignupBootstrap.mockImplementation(async (rawPayload?: unknown) => {
+      if (typeof rawPayload === 'string') {
+        if (!rawPayload.trim()) {
+          throw new Error('storeId required for bootstrap')
+        }
+        return
+      }
+      const payload = (rawPayload ?? {}) as {
+        storeId?: string
+        contact?: { ownerName?: string | null; company?: string | null }
+      }
+      if (typeof payload.storeId !== 'string' || !payload.storeId) {
+        throw new Error('storeId required for bootstrap')
+      }
+      const storeRef = firestore.docMock(null, 'stores', payload.storeId)
+      const createdAt = firestore.serverTimestampMock()
+      const updatedAt = firestore.serverTimestampMock()
+      await firestore.setDocMock(
+        storeRef,
+        {
+          storeId: payload.storeId,
+          ownerId: mocks.auth.currentUser?.uid ?? null,
+          ownerName: payload.contact?.ownerName ?? null,
+          company: payload.contact?.company ?? null,
+          createdAt,
+          updatedAt,
+        },
+        { merge: true },
+      )
+    })
 
     window.localStorage.clear()
     localStorageSetItemSpy = vi.spyOn(Storage.prototype, 'setItem')
@@ -176,6 +228,8 @@ describe('App signup cleanup', () => {
       await user.type(screen.getByLabelText(/Email/i), 'owner@example.com')
       await user.selectOptions(screen.getByLabelText(/Role/i), 'owner')
       await user.type(screen.getByLabelText(/Company/i), 'Sedifex')
+      await user.selectOptions(screen.getByLabelText(/Country code/i), '+44')
+      expect((screen.getByLabelText(/Country code/i) as HTMLSelectElement).value).toBe('+44')
       await user.type(screen.getByLabelText(/Phone/i), ' (555) 123-4567 ')
       await user.type(screen.getByLabelText(/^Password$/i), 'Password1!')
       await user.type(screen.getByLabelText(/Confirm password/i), 'Password1!')
@@ -217,27 +271,33 @@ describe('App signup cleanup', () => {
       await user.type(screen.getByLabelText(/Email/i), 'owner@example.com')
       await user.selectOptions(screen.getByLabelText(/Role/i), 'owner')
       await user.type(screen.getByLabelText(/Company/i), 'Sedifex')
+      await user.selectOptions(screen.getByLabelText(/Country code/i), '+44')
+      expect((screen.getByLabelText(/Country code/i) as HTMLSelectElement).value).toBe('+44')
       await user.type(screen.getByLabelText(/Phone/i), ' (555) 123-4567 ')
       await user.type(screen.getByLabelText(/^Password$/i), 'Password1!')
       await user.type(screen.getByLabelText(/Confirm password/i), 'Password1!')
       await user.click(screen.getByRole('button', { name: /Create account/i }))
     })
 
-    await waitFor(() => expect(mocks.persistSession).toHaveBeenCalled())
-
     const storeId = 'store-test-use'
+    await waitFor(() => expect(mocks.persistSession).toHaveBeenCalled())
+    await waitFor(() => expect(access.afterSignupBootstrap).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(createdUser.getIdToken).toHaveBeenCalledWith(true))
     const { docRefByPath, setDocMock } = firestore
     const ownerDocKey = `teamMembers/${createdUser.uid}`
     const overrideDocKey = 'teamMembers/l8Rbmym8aBVMwL6NpZHntjBHmCo2'
     const customerDocKey = `customers/${createdUser.uid}`
+    const storeDocKey = `stores/${storeId}`
 
     const ownerDocRef = docRefByPath.get(ownerDocKey)
     const overrideDocRef = docRefByPath.get(overrideDocKey)
     const customerDocRef = docRefByPath.get(customerDocKey)
+    const storeDocRef = docRefByPath.get(storeDocKey)
 
     expect(ownerDocRef).toBeDefined()
     expect(overrideDocRef).toBeDefined()
     expect(customerDocRef).toBeDefined()
+    expect(storeDocRef).toBeDefined()
 
     const ownerCall = setDocMock.mock.calls.find(([ref]) => ref === ownerDocRef)
     expect(ownerCall).toBeDefined()
@@ -248,7 +308,9 @@ describe('App signup cleanup', () => {
         storeId,
         role: 'owner',
         company: 'Sedifex',
-        phone: '5551234567',
+        phone: '+445551234567',
+        phoneCountryCode: '+44',
+        phoneLocalNumber: '5551234567',
         email: 'owner@example.com',
         invitedBy: createdUser.uid,
         firstSignupEmail: 'owner@example.com',
@@ -271,7 +333,9 @@ describe('App signup cleanup', () => {
         name: 'owner@example.com',
         displayName: 'owner@example.com',
         email: 'owner@example.com',
-        phone: '5551234567',
+        phone: '+445551234567',
+        phoneCountryCode: '+44',
+        phoneLocalNumber: '5551234567',
         status: 'active',
         role: 'client',
         createdAt: expect.objectContaining({ __type: 'serverTimestamp' }),
@@ -280,11 +344,41 @@ describe('App signup cleanup', () => {
     )
     expect(customerOptions).toEqual({ merge: true })
 
+    const storeCall = setDocMock.mock.calls.find(([ref]) => ref === storeDocRef)
+    expect(storeCall).toBeDefined()
+    const [, storePayload, storeOptions] = storeCall!
+    expect(storePayload).toEqual(
+      expect.objectContaining({
+        storeId,
+        ownerId: createdUser.uid,
+        company: 'Sedifex',
+        ownerName: 'Owner account',
+        createdAt: expect.objectContaining({ __type: 'serverTimestamp' }),
+        updatedAt: expect.objectContaining({ __type: 'serverTimestamp' }),
+      }),
+    )
+    expect(storeOptions).toEqual({ merge: true })
+
+    expect(access.afterSignupBootstrap).toHaveBeenCalledWith({
+      storeId,
+      contact: {
+        phone: '+445551234567',
+        phoneCountryCode: '+44',
+        phoneLocalNumber: '5551234567',
+        firstSignupEmail: 'owner@example.com',
+        company: 'Sedifex',
+        ownerName: 'Owner account',
+      },
+    })
+
+    expect(access.afterSignupBootstrap).toHaveBeenCalledWith(storeId)
+
     expect(mocks.publish).toHaveBeenCalledWith(
       expect.objectContaining({ tone: 'success', message: expect.stringMatching(/All set/i) }),
     )
-    expect(localStorageSetItemSpy).toHaveBeenCalledWith('activeStoreId', storeId)
-    expect(window.localStorage.getItem('activeStoreId')).toBe(storeId)
+    const storageKey = getActiveStoreStorageKey(createdUser.uid)
+    expect(localStorageSetItemSpy).toHaveBeenCalledWith(storageKey, storeId)
+    expect(window.localStorage.getItem(storageKey)).toBe(storeId)
   })
 
   it('creates a team member profile when logging in without an existing doc', async () => {
@@ -340,8 +434,9 @@ describe('App signup cleanup', () => {
     expect(overrideCall).toBeDefined()
     expect(overrideCall?.[1]).toEqual(expect.objectContaining({ storeId }))
 
-    expect(localStorageSetItemSpy).toHaveBeenCalledWith('activeStoreId', storeId)
-    expect(window.localStorage.getItem('activeStoreId')).toBe(storeId)
+    const storageKey = getActiveStoreStorageKey(existingUser.uid)
+    expect(localStorageSetItemSpy).toHaveBeenCalledWith(storageKey, storeId)
+    expect(window.localStorage.getItem(storageKey)).toBe(storeId)
     expect(mocks.publish).toHaveBeenCalledWith(
       expect.objectContaining({ tone: 'success', message: expect.stringMatching(/Welcome back/i) }),
     )

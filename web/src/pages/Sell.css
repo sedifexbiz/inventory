@@ -150,6 +150,13 @@
   border-top: 1px solid #e2e8f0;
 }
 
+.sell-page__payment-breakdown {
+  display: block;
+  margin-top: 4px;
+  font-size: 13px;
+  color: #64748b;
+}
+
 @media (min-width: 720px) {
   .sell-page__payment-summary {
     flex-direction: row;
@@ -326,6 +333,14 @@
 .receipt-print__summary div {
   display: flex;
   justify-content: space-between;
+}
+
+.receipt-print__tenders {
+  flex-basis: 100%;
+  text-align: right;
+  font-size: 13px;
+  color: #475569;
+  margin-top: 4px;
 }
 
 .receipt-print__footer {

@@ -3,6 +3,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { render, screen, waitFor, act, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
+import { formatCurrency } from '@shared/currency'
 import Products from '../Products'
 
 const mockLoadCachedProducts = vi.fn(async () => [] as unknown[])
@@ -20,7 +21,15 @@ vi.mock('../../firebase', () => ({
   db: {},
 }))
 
-const mockUseActiveStoreContext = vi.fn(() => ({ storeId: 'store-1', isLoading: false, error: null }))
+const mockUseActiveStoreContext = vi.fn(() => ({
+  storeId: 'store-1',
+  isLoading: false,
+  error: null,
+  memberships: [],
+  membershipsLoading: false,
+  setActiveStoreId: vi.fn(),
+  storeChangeToken: 0,
+}))
 vi.mock('../../context/ActiveStoreProvider', () => ({
   useActiveStoreContext: () => mockUseActiveStoreContext(),
 }))
@@ -87,7 +96,15 @@ describe('Products page', () => {
     docMock.mockClear()
     whereMock.mockClear()
     mockUseActiveStoreContext.mockReset()
-    mockUseActiveStoreContext.mockReturnValue({ storeId: 'store-1', isLoading: false, error: null })
+    mockUseActiveStoreContext.mockReturnValue({
+      storeId: 'store-1',
+      isLoading: false,
+      error: null,
+      memberships: [],
+      membershipsLoading: false,
+      setActiveStoreId: vi.fn(),
+      storeChangeToken: 0,
+    })
 
 
 
@@ -165,7 +182,7 @@ describe('Products page', () => {
     const productRow = await screen.findByTestId('product-row-product-1')
     expect(productRow).toHaveTextContent('Iced Coffee')
     expect(within(productRow).getByText(/low stock/i)).toBeInTheDocument()
-    expect(within(productRow).getByText(/GHS 12\.00/)).toBeInTheDocument()
+    expect(within(productRow).getByText(formatCurrency(12))).toBeInTheDocument()
     expect(mockSaveCachedProducts).toHaveBeenCalled()
   })
 

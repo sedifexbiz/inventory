@@ -1,28 +1,26 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import {
-  collection,
-  query,
-  orderBy,
-  limit,
-  onSnapshot,
-  where,
-  runTransaction,
-  doc,
-  serverTimestamp,
-} from 'firebase/firestore'
+import { collection, query, orderBy, limit, onSnapshot, where } from 'firebase/firestore'
 import { FirebaseError } from 'firebase/app'
-import { db } from '../firebase'
+import { httpsCallable } from 'firebase/functions'
+import { db, functions } from '../firebase'
 import { useActiveStoreContext } from '../context/ActiveStoreProvider'
 import './Receive.css'
+import { queueCallableRequest } from '../utils/offlineQueue'
 import { loadCachedProducts, saveCachedProducts, PRODUCT_CACHE_LIMIT } from '../utils/offlineCache'
+import { useToast } from '../components/ToastProvider'
+import { FIREBASE_CALLABLES } from '@shared/firebaseCallables'
 
 type Product = {
   id: string
   name: string
-  storeId?: string
   stockCount?: number
   createdAt?: unknown
   updatedAt?: unknown
+}
+
+type PendingReceipt = {
+  baseline: number
+  increment: number
 }
 
 function isOfflineError(error: unknown) {
@@ -44,7 +42,7 @@ function isOfflineError(error: unknown) {
 }
 
 export default function Receive() {
-  const { storeId: activeStoreId } = useActiveStoreContext()
+  const { storeId: activeStoreId, storeChangeToken } = useActiveStoreContext()
   const [products, setProducts] = useState<Product[]>([])
   const [selected, setSelected] = useState<string>('')
   const [qty, setQty] = useState<string>('')
@@ -54,7 +52,17 @@ export default function Receive() {
   const [status, setStatus] = useState<{ tone: 'success' | 'error'; message: string } | null>(null)
   const [busy, setBusy] = useState(false)
   const statusTimeoutRef = useRef<number | null>(null)
+  const [pendingReceipts, setPendingReceipts] = useState<Record<string, PendingReceipt>>({})
+  const pendingReceiptsRef = useRef(pendingReceipts)
+  const receiveStock = useMemo(
+    () => httpsCallable(functions, FIREBASE_CALLABLES.RECEIVE_STOCK),
+    [],
+  )
+  const { publish } = useToast()
 
+  useEffect(() => {
+    pendingReceiptsRef.current = pendingReceipts
+  }, [pendingReceipts])
   useEffect(() => {
     return () => {
       if (statusTimeoutRef.current) {
@@ -78,6 +86,8 @@ export default function Receive() {
   useEffect(() => {
     let cancelled = false
 
+    setProducts([])
+
     if (!activeStoreId) {
       setProducts([])
       return () => {
@@ -85,12 +95,20 @@ export default function Receive() {
       }
     }
 
-    // 1) Warm cache
     loadCachedProducts<Product>({ storeId: activeStoreId })
       .then(cached => {
         if (!cancelled && cached.length) {
+          const pending = pendingReceiptsRef.current
+          const withPending = cached.map(product => {
+            const entry = pending[product.id]
+            if (!entry) return product
+            const baseStock = product.stockCount ?? 0
+            return { ...product, stockCount: baseStock + entry.increment }
+          })
           setProducts(
-            [...cached].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })),
+            [...withPending].sort((a, b) =>
+              a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }),
+            ),
           )
         }
       })
@@ -98,7 +116,6 @@ export default function Receive() {
         console.warn('[receive] Failed to load cached products', error)
       })
 
-    // 2) Live query (store-partitioned)
     const q = query(
       collection(db, 'products'),
       where('storeId', '==', activeStoreId),
@@ -108,11 +125,38 @@ export default function Receive() {
     )
 
     const unsubscribe = onSnapshot(q, snap => {
-      const rows = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) }))
-      saveCachedProducts(rows, { storeId: activeStoreId }).catch(error => {
+      const pending = { ...pendingReceiptsRef.current }
+      const rawRows = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) }))
+
+      const rowsWithPending = rawRows.map(row => {
+        const actualStock = row.stockCount ?? 0
+        const entry = pending[row.id]
+        if (!entry) {
+          return row
+        }
+
+        const appliedDelta = actualStock - entry.baseline
+        if (appliedDelta >= entry.increment) {
+          delete pending[row.id]
+          return { ...row, stockCount: actualStock }
+        }
+
+        const remaining = entry.increment - Math.max(appliedDelta, 0)
+        pending[row.id] = {
+          baseline: actualStock,
+          increment: remaining,
+        }
+
+        return { ...row, stockCount: actualStock + remaining }
+      })
+
+      pendingReceiptsRef.current = pending
+      setPendingReceipts(pending)
+
+      saveCachedProducts(rowsWithPending, { storeId: activeStoreId }).catch(error => {
         console.warn('[receive] Failed to cache products', error)
       })
-      const sortedRows = [...rows].sort((a, b) =>
+      const sortedRows = [...rowsWithPending].sort((a, b) =>
         a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }),
       )
       setProducts(sortedRows)
@@ -122,7 +166,18 @@ export default function Receive() {
       cancelled = true
       unsubscribe()
     }
-  }, [activeStoreId])
+  }, [activeStoreId, storeChangeToken])
+
+  useEffect(() => {
+    setSelected('')
+    setQty('')
+    setSupplier('')
+    setReference('')
+    setUnitCost('')
+    setStatus(null)
+    pendingReceiptsRef.current = {}
+    setPendingReceipts({})
+  }, [storeChangeToken])
 
   async function receive() {
     if (!selected || qty === '') return
@@ -130,116 +185,94 @@ export default function Receive() {
       showStatus('error', 'Select a workspace before receiving stock.')
       return
     }
-
     const p = products.find(x => x.id === selected)
-    if (!p) {
-      showStatus('error', 'Select a valid product.')
-      return
-    }
-
+    if (!p) return
     const amount = Number(qty)
     if (!Number.isFinite(amount) || amount <= 0) {
       showStatus('error', 'Enter a valid quantity greater than zero.')
       return
     }
-
     const supplierName = supplier.trim()
     if (!supplierName) {
       showStatus('error', 'Add the supplier who fulfilled this delivery.')
       return
     }
-
     const referenceNumber = reference.trim()
     if (!referenceNumber) {
       showStatus('error', 'Add the packing slip or purchase order reference number.')
       return
     }
-
     const costValue = unitCost.trim()
     const parsedCost = costValue ? Number(costValue) : null
     if (parsedCost !== null && (!Number.isFinite(parsedCost) || parsedCost < 0)) {
       showStatus('error', 'Enter a valid cost that is zero or greater.')
       return
     }
-
     setBusy(true)
+    const payload = {
+      productId: selected,
+      qty: amount,
+      supplier: supplierName,
+      reference: referenceNumber,
+      unitCost: parsedCost,
+    }
 
     try {
-      const productRef = doc(db, 'products', selected)
-      const receiptId = doc(collection(db, 'stockReceipts')).id
-      const now = serverTimestamp()
-
-      await runTransaction(db, async (tx) => {
-        // READ FIRST
-        const snap = await tx.get(productRef)
-        if (!snap.exists()) throw new Error('PRODUCT_NOT_FOUND')
-        const data = snap.data() as any
-
-        if (data.storeId !== activeStoreId) {
-          throw new Error('PRODUCT_STORE_MISMATCH')
-        }
-
-        const currentStock = Number(data.stockCount ?? 0)
-        if (!Number.isFinite(currentStock)) {
-          throw new Error('BAD_PRODUCT_STOCKCOUNT')
-        }
-
-        // CREATE RECEIPT
-        const receiptRef = doc(db, 'stockReceipts', receiptId)
-        tx.set(receiptRef, {
-          id: receiptId,
-          storeId: activeStoreId,
-          createdAt: now,
-          updatedAt: now,
-          status: 'posted',
-          vendor: supplierName,
-          reference: referenceNumber,
-          note: null,
-          lines: [
-            {
-              productId: selected,
-              qty: amount,
-              unitCost: parsedCost ?? null,
-            },
-          ],
-        })
-
-        // UPDATE PRODUCT STOCK
-        tx.update(productRef, {
-          stockCount: currentStock + amount,
-          updatedAt: now,
-          lastReceiptId: receiptId,
-          lastReceiptAt: now,
-        })
-      })
-
-      // reset form
+      await receiveStock(payload)
       setQty('')
       setSupplier('')
       setReference('')
       setUnitCost('')
       showStatus('success', 'Stock received successfully.')
-    } catch (error: any) {
+    } catch (error) {
       console.error('[receive] Failed to update stock', error)
+      if (isOfflineError(error)) {
+        const queued = await queueCallableRequest(
+          FIREBASE_CALLABLES.RECEIVE_STOCK,
+          payload,
+          'receipt',
+        )
+        if (queued) {
+          setQty('')
+          setSupplier('')
+          setReference('')
+          setUnitCost('')
+          publish({ message: 'Queued receipt • will sync', tone: 'success' })
+          const existing = pendingReceiptsRef.current[selected]
+          const baseline = existing ? existing.baseline : (p.stockCount ?? 0)
+          const totalIncrement = (existing?.increment ?? 0) + amount
+          const nextPending = {
+            ...pendingReceiptsRef.current,
+            [selected]: {
+              baseline,
+              increment: totalIncrement,
+            },
+          }
+          pendingReceiptsRef.current = nextPending
+          setPendingReceipts(nextPending)
 
-      // Friendlier messages
-      const code = (error?.message || '').toString()
-
-      if (code === 'PRODUCT_NOT_FOUND') {
-        showStatus('error', 'Product not found.')
-      } else if (code === 'PRODUCT_STORE_MISMATCH') {
-        showStatus('error', 'This product belongs to a different workspace.')
-      } else if (code === 'BAD_PRODUCT_STOCKCOUNT') {
-        showStatus('error', 'Product stock is invalid. Please check the product setup.')
-      } else if (isOfflineError(error)) {
-        showStatus('error', 'You appear to be offline. Please reconnect and try again.')
-      } else {
-        showStatus('error', 'Unable to record stock receipt. Please try again.')
+          const nextProducts = products.map(product => {
+            if (product.id !== selected) return product
+            return {
+              ...product,
+              stockCount: baseline + totalIncrement,
+            }
+          })
+          setProducts(nextProducts)
+          saveCachedProducts(nextProducts, { storeId: activeStoreId }).catch(cacheError => {
+            console.warn('[receive] Failed to cache products after queueing receipt', cacheError)
+          })
+          showStatus('success', 'Offline receipt saved.')
+          return
+        }
       }
+      showStatus('error', 'Unable to record stock receipt. Please try again.')
     } finally {
       setBusy(false)
     }
   }
+
+
 
   return (
     <div className="page receive-page">
@@ -262,12 +295,11 @@ export default function Receive() {
               <option value="">Select product…</option>
               {products.map(p => (
                 <option key={p.id} value={p.id}>
-                  {p.name} (Stock {Number.isFinite(p.stockCount as any) ? (p.stockCount as number) : 0})
+                  {p.name} (Stock {p.stockCount ?? 0})
                 </option>
               ))}
             </select>
           </div>
-
           <div className="field">
             <label className="field__label" htmlFor="receive-qty">Quantity received</label>
             <input
@@ -279,7 +311,6 @@ export default function Receive() {
               onChange={e => setQty(e.target.value)}
             />
           </div>
-
           <div className="field">
             <label className="field__label" htmlFor="receive-supplier">Supplier</label>
             <input
@@ -290,7 +321,6 @@ export default function Receive() {
               onChange={e => setSupplier(e.target.value)}
             />
           </div>
-
           <div className="field">
             <label className="field__label" htmlFor="receive-reference">Reference number</label>
             <input
@@ -301,7 +331,6 @@ export default function Receive() {
               onChange={e => setReference(e.target.value)}
             />
           </div>
-
           <div className="field">
             <label className="field__label" htmlFor="receive-cost">Unit cost (optional)</label>
             <input
@@ -314,7 +343,6 @@ export default function Receive() {
               onChange={e => setUnitCost(e.target.value)}
             />
           </div>
-
           <div className="receive-page__actions">
             <button
               type="button"
@@ -325,7 +353,6 @@ export default function Receive() {
               Add stock
             </button>
           </div>
-
           {status && (
             <p
               className={`receive-page__message receive-page__message--${status.tone}`}

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   collection,
   query,
@@ -25,7 +25,9 @@ import {
   saveCachedCustomers,
   saveCachedProducts,
 } from '../utils/offlineCache'
+import { ensureCustomerLoyalty, normalizeCustomerLoyalty, type CustomerLoyalty } from '../utils/customerLoyalty'
 import { buildSimplePdf } from '../utils/pdf'
+import { formatCurrency } from '@shared/currency'
 
 type Product = {
   id: string
@@ -46,17 +48,17 @@ type Customer = {
   notes?: string
   createdAt?: unknown
   updatedAt?: unknown
+  loyalty: CustomerLoyalty
 }
+
+type FirestoreCustomer = Omit<Customer, 'loyalty'> & { loyalty?: unknown }
 type ReceiptData = {
   saleId: string
   createdAt: Date
   items: CartLine[]
   subtotal: number
-  payment: {
-    method: string
-    amountPaid: number
-    changeDue: number
-  }
+  tenders: Record<string, number>
+  changeDue: number
   customer?: {
     name: string
     phone?: string
@@ -157,9 +159,46 @@ function sanitizePrice(value: unknown): number | null {
   return null
 }
 
+type TenderEntry = { method: string; amount: number }
+
+function normalizeTenderEntries(tenders: Record<string, number>): TenderEntry[] {
+  return Object.entries(tenders)
+    .map(([method, amount]) => ({ method, amount }))
+    .filter(entry => Number.isFinite(entry.amount) && entry.amount > 0)
+}
+
+function getTenderTotal(tenders: Record<string, number>): number {
+  return normalizeTenderEntries(tenders).reduce((sum, entry) => sum + entry.amount, 0)
+}
+
+function formatTenderMethod(method: string): string {
+  const normalized = method.trim().toLowerCase()
+  if (!normalized) return 'Unknown'
+  if (normalized === 'cash') return 'Cash'
+  if (normalized === 'card') return 'Card'
+  if (normalized === 'mobile') return 'Mobile'
+  return method
+}
+
+function formatTenderBreakdown(tenders: Record<string, number>): string {
+  const entries = normalizeTenderEntries(tenders)
+  if (!entries.length) return ''
+  return entries
+    .map(entry => `${formatTenderMethod(entry.method)} ${formatCurrency(entry.amount)}`)
+    .join(' • ')
+}
+
+function calculateEarnedLoyaltyPoints(total: number): number {
+  if (!Number.isFinite(total) || total <= 0) {
+    return 0
+  }
+  // Placeholder for future earning rules. Keep scaffolded structure consistent for now.
+  return 0
+}
+
 export default function Sell() {
   const user = useAuthUser()
-  const { storeId: activeStoreId } = useActiveStoreContext()
+  const { storeId: activeStoreId, storeChangeToken } = useActiveStoreContext()
 
   const [products, setProducts] = useState<Product[]>([])
   const [customers, setCustomers] = useState<Customer[]>([])
@@ -188,9 +227,20 @@ export default function Sell() {
   const amountPaid = paymentMethod === 'cash' ? Number(amountTendered || 0) : subtotal
   const changeDue = Math.max(0, amountPaid - subtotal)
   const isCashShort = paymentMethod === 'cash' && amountPaid < subtotal && subtotal > 0
+  const tenders = useMemo(() => {
+    const entries: Record<string, number> = {}
+    if (paymentMethod === 'card') entries.card = subtotal
+    if (paymentMethod === 'mobile') entries.mobile = subtotal
+    if (paymentMethod === 'cash') entries.cash = amountPaid
+    return entries
+  }, [amountPaid, paymentMethod, subtotal])
+  const tenderTotal = useMemo(() => getTenderTotal(tenders), [tenders])
+  const tenderBreakdown = useMemo(() => formatTenderBreakdown(tenders), [tenders])
 
   useEffect(() => {
     let cancelled = false
+
+    setProducts([])
 
     if (!activeStoreId) {
       setProducts([])
@@ -245,10 +295,12 @@ export default function Sell() {
       cancelled = true
       unsubscribe()
     }
-  }, [activeStoreId])
+  }, [activeStoreId, storeChangeToken])
 
   useEffect(() => {
     let cancelled = false
+
+    setCustomers([])
 
     if (!activeStoreId) {
       setCustomers([])
@@ -257,11 +309,12 @@ export default function Sell() {
       }
     }
 
-    loadCachedCustomers<Customer>({ storeId: activeStoreId })
+    loadCachedCustomers<FirestoreCustomer>({ storeId: activeStoreId })
       .then(cached => {
         if (!cancelled && cached.length) {
+          const normalized = cached.map(entry => ensureCustomerLoyalty(entry))
           setCustomers(
-            [...cached].sort((a, b) =>
+            [...normalized].sort((a, b) =>
               getCustomerSortKey(a).localeCompare(getCustomerSortKey(b), undefined, {
                 sensitivity: 'base',
               }),
@@ -282,7 +335,9 @@ export default function Sell() {
     )
 
     const unsubscribe = onSnapshot(q, snap => {
-      const rows = snap.docs.map(docSnap => ({ id: docSnap.id, ...(docSnap.data() as Customer) }))
+      const rows = snap.docs.map(docSnap =>
+        ensureCustomerLoyalty({ id: docSnap.id, ...(docSnap.data() as FirestoreCustomer) }),
+      )
       saveCachedCustomers(rows, { storeId: activeStoreId }).catch(error => {
         console.warn('[sell] Failed to cache customers', error)
       })
@@ -298,7 +353,7 @@ export default function Sell() {
       cancelled = true
       unsubscribe()
     }
-  }, [activeStoreId])
+  }, [activeStoreId, storeChangeToken])
 
   useEffect(() => {
     if (!receipt) return
@@ -341,13 +396,17 @@ export default function Sell() {
     lines.push('')
     lines.push('Items:')
     receipt.items.forEach(line => {
-      lines.push(`  • ${line.qty} × ${line.name} — GHS ${(line.qty * line.price).toFixed(2)}`)
+      lines.push(`  • ${line.qty} × ${line.name} — ${formatCurrency(line.qty * line.price)}`)
     })
 
     lines.push('')
-    lines.push(`Subtotal: GHS ${receipt.subtotal.toFixed(2)}`)
-    lines.push(`Paid (${receipt.payment.method}): GHS ${receipt.payment.amountPaid.toFixed(2)}`)
-    lines.push(`Change: GHS ${receipt.payment.changeDue.toFixed(2)}`)
+    lines.push(`Subtotal: ${formatCurrency(receipt.subtotal)}`)
+    const receiptTenderTotal = getTenderTotal(receipt.tenders)
+    lines.push(`Paid: ${formatCurrency(receiptTenderTotal)}`)
+    normalizeTenderEntries(receipt.tenders).forEach(entry => {
+      lines.push(`  ${formatTenderMethod(entry.method)} — ${formatCurrency(entry.amount)}`)
+    })
+    lines.push(`Change: ${formatCurrency(receipt.changeDue)}`)
     lines.push('')
     lines.push(`Sale #${receipt.saleId}`)
     lines.push('Thank you for shopping with us!')
@@ -379,6 +438,20 @@ export default function Sell() {
       URL.revokeObjectURL(pdfUrl)
     }
   }, [receipt, user?.email])
+
+  useEffect(() => {
+    setQueryText('')
+    setCart([])
+    setSelectedCustomerId('')
+    setPaymentMethod('cash')
+    setAmountTendered('')
+    setSaleError(null)
+    setSaleSuccess(null)
+    setIsRecording(false)
+    setScannerStatus(null)
+    setReceipt(null)
+    setReceiptSharePayload(null)
+  }, [storeChangeToken])
 
   const handleDownloadPdf = useCallback(() => {
     setReceiptSharePayload(prev => {
@@ -507,6 +580,8 @@ export default function Sell() {
         }
       : null
 
+    const loyaltyPointsEarned = calculateEarnedLoyaltyPoints(subtotal)
+
     try {
       await runTransaction(db, async transaction => {
         const existingSale = await transaction.get(saleRef)
@@ -554,11 +629,8 @@ export default function Sell() {
           cashierId: user.uid,
           total: subtotal,
           taxTotal: 0,
-          payment: {
-            method: paymentMethod,
-            amountPaid,
-            changeDue,
-          },
+          tenders: { ...tenders },
+          changeDue,
           customer: saleCustomer,
           items: normalizedItems,
           createdBy: user.uid,
@@ -651,6 +723,45 @@ export default function Sell() {
         for (const { ref, data } of productUpdates) {
           transaction.update(ref, data)
         }
+
+        if (selectedCustomer) {
+          const customerRef = doc(db, 'customers', selectedCustomer.id)
+          const customerSnapshot = await transaction.get(customerRef)
+          const customerExists =
+            customerSnapshot &&
+            (typeof customerSnapshot.exists === 'function'
+              ? customerSnapshot.exists()
+              : customerSnapshot.exists)
+
+          const existingData =
+            typeof customerSnapshot?.data === 'function'
+              ? customerSnapshot.data()
+              : (customerSnapshot?.data as Record<string, unknown> | undefined)
+
+          const loyaltySource =
+            existingData && typeof existingData === 'object' && 'loyalty' in existingData
+              ? (existingData as { loyalty?: unknown }).loyalty
+              : undefined
+
+          const normalizedLoyalty = normalizeCustomerLoyalty(loyaltySource)
+          const nextPoints = Math.max(0, normalizedLoyalty.points + loyaltyPointsEarned)
+
+          if (customerExists) {
+            transaction.update(customerRef, {
+              'loyalty.lastVisitAt': timestamp,
+              'loyalty.points': nextPoints,
+              updatedAt: timestamp,
+            })
+          } else {
+            transaction.set(customerRef, {
+              loyalty: {
+                points: nextPoints,
+                lastVisitAt: timestamp,
+              },
+              updatedAt: timestamp,
+            })
+          }
+        }
       })
 
       setReceipt({
@@ -658,11 +769,8 @@ export default function Sell() {
         createdAt: new Date(),
         items: receiptItems,
         subtotal,
-        payment: {
-          method: paymentMethod,
-          amountPaid,
-          changeDue,
-        },
+        tenders: { ...tenders },
+        changeDue,
         customer: saleCustomer || undefined,
       })
       setCart([])
@@ -694,7 +802,7 @@ export default function Sell() {
         </div>
         <div className="sell-page__total" aria-live="polite">
           <span className="sell-page__total-label">Subtotal</span>
-          <span className="sell-page__total-value">GHS {subtotal.toFixed(2)}</span>
+          <span className="sell-page__total-value">{formatCurrency(subtotal)}</span>
         </div>
       </header>
 
@@ -739,9 +847,7 @@ export default function Sell() {
             {filtered.length ? (
               filtered.map(p => {
                 const hasPrice = typeof p.price === 'number' && Number.isFinite(p.price)
-                const priceText = hasPrice
-                  ? `GHS ${p.price.toFixed(2)}`
-                  : 'Price unavailable'
+                const priceText = hasPrice ? formatCurrency(p.price ?? 0) : 'Price unavailable'
                 const actionLabel = hasPrice ? 'Add' : 'Set price to sell'
                 return (
                   <button
@@ -799,7 +905,7 @@ export default function Sell() {
                             onChange={e => setQty(line.productId, Number(e.target.value))}
                           />
                         </td>
-                        <td className="sell-page__numeric">GHS {(line.price * line.qty).toFixed(2)}</td>
+                        <td className="sell-page__numeric">{formatCurrency(line.price * line.qty)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -808,7 +914,7 @@ export default function Sell() {
 
               <div className="sell-page__summary">
                 <span>Total</span>
-                <strong>GHS {subtotal.toFixed(2)}</strong>
+                <strong>{formatCurrency(subtotal)}</strong>
               </div>
 
               <div className="sell-page__form-grid">
@@ -882,15 +988,18 @@ export default function Sell() {
               <div className="sell-page__payment-summary" aria-live="polite">
                 <div>
                   <span className="sell-page__summary-label">Amount due</span>
-                  <strong>GHS {subtotal.toFixed(2)}</strong>
+                  <strong>{formatCurrency(subtotal)}</strong>
                 </div>
                 <div>
                   <span className="sell-page__summary-label">Paid</span>
-                  <strong>GHS {amountPaid.toFixed(2)}</strong>
+                  <strong>{formatCurrency(tenderTotal)}</strong>
+                  {tenderBreakdown && (
+                    <span className="sell-page__payment-breakdown">{tenderBreakdown}</span>
+                  )}
                 </div>
                 <div className={`sell-page__change${isCashShort ? ' is-short' : ''}`}>
                   <span className="sell-page__summary-label">{isCashShort ? 'Short' : 'Change due'}</span>
-                  <strong>GHS {changeDue.toFixed(2)}</strong>
+                  <strong>{formatCurrency(changeDue)}</strong>
                 </div>
               </div>
 
@@ -998,7 +1107,7 @@ export default function Sell() {
                   <tr key={line.productId}>
                     <td>{line.name}</td>
                     <td>{line.qty}</td>
-                    <td>GHS {(line.qty * line.price).toFixed(2)}</td>
+                    <td>{formatCurrency(line.qty * line.price)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -1007,15 +1116,18 @@ export default function Sell() {
             <div className="receipt-print__summary">
               <div>
                 <span>Subtotal</span>
-                <strong>GHS {receipt.subtotal.toFixed(2)}</strong>
+                <strong>{formatCurrency(receipt.subtotal)}</strong>
               </div>
               <div>
-                <span>Paid ({receipt.payment.method})</span>
-                <strong>GHS {receipt.payment.amountPaid.toFixed(2)}</strong>
+                <span>Paid</span>
+                <strong>{formatCurrency(getTenderTotal(receipt.tenders))}</strong>
+                {formatTenderBreakdown(receipt.tenders) && (
+                  <span className="receipt-print__tenders">{formatTenderBreakdown(receipt.tenders)}</span>
+                )}
               </div>
               <div>
                 <span>Change</span>
-                <strong>GHS {receipt.payment.changeDue.toFixed(2)}</strong>
+                <strong>{formatCurrency(receipt.changeDue)}</strong>
               </div>
             </div>
 

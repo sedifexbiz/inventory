@@ -1,4 +1,4 @@
-import React, { FormEvent, useEffect, useMemo, useState } from 'react'
+import React, { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import {
   addDoc,
   collection,
@@ -10,6 +10,7 @@ import {
   serverTimestamp,
   updateDoc,
   where,
+  writeBatch,
 } from 'firebase/firestore'
 import { FirebaseError } from 'firebase/app'
 import { Link } from 'react-router-dom'
@@ -20,7 +21,14 @@ import {
   loadCachedProducts,
   saveCachedProducts,
 } from '../utils/offlineCache'
+import { parseCsv } from '../utils/csv'
+import {
+  buildProductImportOperations,
+  normalizeProductCsvRows,
+  type ProductImportOperation,
+} from './productsImport'
 import './Products.css'
+import { formatCurrency } from '@shared/currency'
 
 interface ReceiptDetails {
   qty?: number | null
@@ -150,7 +158,7 @@ function isOfflineError(error: unknown) {
 }
 
 export default function Products() {
-  const { storeId: activeStoreId } = useActiveStoreContext()
+  const { storeId: activeStoreId, storeChangeToken } = useActiveStoreContext()
   const [products, setProducts] = useState<ProductRecord[]>([])
   const [isLoadingProducts, setIsLoadingProducts] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -163,10 +171,15 @@ export default function Products() {
   const [editStatus, setEditStatus] = useState<StatusState | null>(null)
   const [editingProductId, setEditingProductId] = useState<string | null>(null)
   const [isUpdating, setIsUpdating] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const [isImporting, setIsImporting] = useState(false)
+  const [importStatus, setImportStatus] = useState<StatusState | null>(null)
 
   useEffect(() => {
-    let cancelled = false
+    setProducts([])
     setLoadError(null)
+
+    let cancelled = false
 
     if (!activeStoreId) {
       setProducts([])
@@ -251,7 +264,22 @@ export default function Products() {
       cancelled = true
       unsubscribe()
     }
-  }, [activeStoreId])
+  }, [activeStoreId, storeChangeToken])
+
+  useEffect(() => {
+    setFilterText('')
+    setShowLowStockOnly(false)
+    setCreateForm(DEFAULT_CREATE_FORM)
+    setCreateStatus(null)
+    setEditForm(DEFAULT_EDIT_FORM)
+    setEditStatus(null)
+    setEditingProductId(null)
+    setImportStatus(null)
+    setIsImporting(false)
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+  }, [storeChangeToken])
 
   useEffect(() => {
     if (!editingProductId) {
@@ -519,6 +547,192 @@ export default function Products() {
     }
   }
 
+  function isCreateOperation(
+    operation: ProductImportOperation,
+  ): operation is Extract<ProductImportOperation, { type: 'create' }> {
+    return operation.type === 'create'
+  }
+
+  function buildCreatePayload(
+    operation: Extract<ProductImportOperation, { type: 'create' }>,
+    storeId: string,
+  ) {
+    return {
+      name: operation.payload.name,
+      price: operation.payload.price,
+      sku: operation.payload.sku,
+      reorderThreshold: operation.payload.reorderThreshold ?? null,
+      stockCount: operation.payload.stockCount ?? 0,
+      storeId,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    }
+  }
+
+  function buildUpdatePayload(
+    operation: Extract<ProductImportOperation, { type: 'update' }>,
+    storeId: string,
+  ) {
+    const payload: Record<string, unknown> = {
+      name: operation.payload.name,
+      price: operation.payload.price,
+      sku: operation.payload.sku,
+      reorderThreshold: operation.payload.reorderThreshold ?? null,
+      storeId,
+      updatedAt: serverTimestamp(),
+    }
+
+    if (operation.payload.stockCount !== null) {
+      payload.stockCount = operation.payload.stockCount
+    }
+
+    return payload
+  }
+
+  async function handleProductCsvImport(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    setIsImporting(true)
+    setImportStatus(null)
+
+    try {
+      if (!activeStoreId) {
+        throw new Error('Select a workspace before importing products.')
+      }
+
+      const text = await file.text()
+      const rows = parseCsv(text)
+      if (!rows.length) {
+        throw new Error('No rows detected in the file.')
+      }
+
+      const normalization = normalizeProductCsvRows(rows)
+      const { rows: normalizedRows, skipped, errors, total } = normalization
+      if (!normalizedRows.length) {
+        const message = errors[0] ?? 'No valid product rows were found in this file.'
+        throw new Error(message)
+      }
+
+      const storeProducts = products.filter(product => product.storeId === activeStoreId)
+      const { operations, counts } = buildProductImportOperations({
+        rows: normalizedRows,
+        existingProducts: storeProducts,
+      })
+
+      if (!operations.length) {
+        const message = errors[0] ?? 'No valid product rows were found in this file.'
+        throw new Error(message)
+      }
+
+      const BATCH_LIMIT = 400
+      let completedCreates = 0
+      let completedUpdates = 0
+      let offlineFallbackUsed = false
+      let index = 0
+
+      while (index < operations.length) {
+        const chunk = operations.slice(index, index + BATCH_LIMIT)
+        const createCount = chunk.filter(isCreateOperation).length
+        const updateCount = chunk.length - createCount
+        const batch = writeBatch(db)
+
+        chunk.forEach(operation => {
+          if (isCreateOperation(operation)) {
+            const ref = doc(collection(db, 'products'))
+            batch.set(ref, buildCreatePayload(operation, activeStoreId))
+          } else {
+            batch.update(doc(db, 'products', operation.id), buildUpdatePayload(operation, activeStoreId))
+          }
+        })
+
+        try {
+          await batch.commit()
+          completedCreates += createCount
+          completedUpdates += updateCount
+        } catch (error) {
+          if (isOfflineError(error)) {
+            offlineFallbackUsed = true
+            for (let j = index; j < operations.length; j += 1) {
+              const operation = operations[j]
+              try {
+                if (isCreateOperation(operation)) {
+                  await addDoc(collection(db, 'products'), buildCreatePayload(operation, activeStoreId))
+                  completedCreates += 1
+                } else {
+                  await updateDoc(doc(db, 'products', operation.id), buildUpdatePayload(operation, activeStoreId))
+                  completedUpdates += 1
+                }
+              } catch (fallbackError) {
+                if (isOfflineError(fallbackError)) {
+                  if (operation.type === 'create') {
+                    completedCreates += 1
+                  } else {
+                    completedUpdates += 1
+                  }
+                } else {
+                  console.error('[products] Failed to import products', fallbackError)
+                  setImportStatus({
+                    tone: 'error',
+                    message: 'We were unable to import products from this file.',
+                  })
+                  return
+                }
+              }
+            }
+            index = operations.length
+            break
+          }
+
+          const processed = completedCreates + completedUpdates
+          console.error('[products] Failed to import products', error)
+          let message = processed
+            ? `Imported ${processed} product${processed === 1 ? '' : 's'} before we hit an error. Please review the file and try again.`
+            : 'We were unable to import products from this file.'
+          if (skipped > 0) {
+            message += ` Skipped ${skipped} row${skipped === 1 ? '' : 's'} due to formatting issues.`
+          }
+          if (errors[0]) {
+            message += ` First skipped row: ${errors[0]}.`
+          }
+          setImportStatus({ tone: 'error', message })
+          return
+        }
+
+        index += chunk.length
+      }
+
+      const finalCreates = offlineFallbackUsed ? counts.toCreate : completedCreates
+      const finalUpdates = offlineFallbackUsed ? counts.toUpdate : completedUpdates
+      const processedRows = finalCreates + finalUpdates
+      const totalRows = total || processedRows + skipped
+      const skippedRows = Math.max(skipped, totalRows - processedRows)
+
+      const prefix = offlineFallbackUsed
+        ? 'Offline — product import saved and will sync when you reconnect.'
+        : 'Imported products successfully.'
+
+      let message = `${prefix} Processed ${processedRows} of ${totalRows} row${totalRows === 1 ? '' : 's'} (${finalCreates} added, ${finalUpdates} updated).`
+      if (skippedRows > 0) {
+        message += ` Skipped ${skippedRows} row${skippedRows === 1 ? '' : 's'} due to formatting issues.`
+        if (errors[0]) {
+          message += ` First skipped row: ${errors[0]}.`
+        }
+      }
+
+      setImportStatus({ tone: 'success', message })
+    } catch (error) {
+      console.error('[products] Unable to import CSV', error)
+      const message = error instanceof Error ? error.message : 'We were unable to import products from this file.'
+      setImportStatus({ tone: 'error', message })
+    } finally {
+      setIsImporting(false)
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ''
+      }
+    }
+  }
+
   function renderStatus(status: StatusState | null) {
     if (!status) return null
     return (
@@ -545,24 +759,44 @@ export default function Products() {
 
       <section className="card products-page__card">
         <div className="products-page__toolbar">
-          <label className="products-page__search">
-            <span className="products-page__search-label">Search</span>
+          <div className="products-page__toolbar-left">
+            <label className="products-page__search">
+              <span className="products-page__search-label">Search</span>
+              <input
+                type="search"
+                placeholder="Search by product or SKU"
+                value={filterText}
+                onChange={event => setFilterText(event.target.value)}
+              />
+            </label>
+            <label className="products-page__filter">
+              <input
+                type="checkbox"
+                checked={showLowStockOnly}
+                onChange={event => setShowLowStockOnly(event.target.checked)}
+              />
+              <span>Show low stock only</span>
+            </label>
+          </div>
+          <div className="products-page__tool-buttons">
+            <button
+              type="button"
+              className="button button--outline button--small"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isImporting}
+            >
+              {isImporting ? 'Importing…' : 'Import CSV'}
+            </button>
             <input
-              type="search"
-              placeholder="Search by product or SKU"
-              value={filterText}
-              onChange={event => setFilterText(event.target.value)}
+              ref={fileInputRef}
+              type="file"
+              accept=".csv,text/csv"
+              className="products-page__import-input"
+              onChange={handleProductCsvImport}
             />
-          </label>
-          <label className="products-page__filter">
-            <input
-              type="checkbox"
-              checked={showLowStockOnly}
-              onChange={event => setShowLowStockOnly(event.target.checked)}
-            />
-            <span>Show low stock only</span>
-          </label>
+          </div>
         </div>
+        {renderStatus(importStatus)}
         {loadError ? <div className="products-page__error">{loadError}</div> : null}
         {isLoadingProducts ? <div className="products-page__loading">Loading products…</div> : null}
         {!isLoadingProducts && filteredProducts.length === 0 ? (
@@ -606,7 +840,7 @@ export default function Products() {
                       <td>{product.sku || '—'}</td>
                       <td>{
                         typeof product.price === 'number' && Number.isFinite(product.price)
-                          ? `GHS ${product.price.toFixed(2)}`
+                          ? formatCurrency(product.price)
                           : '—'
                       }</td>
                       <td>{stockCount}</td>

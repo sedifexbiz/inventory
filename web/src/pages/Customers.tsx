@@ -17,6 +17,7 @@ import { Link } from 'react-router-dom'
 import { db } from '../firebase'
 import { useActiveStoreContext } from '../context/ActiveStoreProvider'
 import './Customers.css'
+import { formatCurrency } from '@shared/currency'
 import {
   CUSTOMER_CACHE_LIMIT,
   SALES_CACHE_LIMIT,
@@ -25,6 +26,14 @@ import {
   saveCachedCustomers,
   saveCachedSales,
 } from '../utils/offlineCache'
+import {
+  createCustomerLoyalty,
+  ensureCustomerLoyalty,
+  loyaltyTimestampToDate,
+  normalizeCustomerLoyalty,
+  type CustomerLoyalty,
+} from '../utils/customerLoyalty'
+import { parseCsv } from '../utils/csv'
 
 type Customer = {
   id: string
@@ -36,13 +45,17 @@ type Customer = {
   tags?: string[]
   createdAt?: Timestamp | null
   updatedAt?: Timestamp | null
+  loyalty: CustomerLoyalty
 }
+
+type FirestoreCustomer = Omit<Customer, 'loyalty'> & { loyalty?: unknown }
 
 type SaleHistoryEntry = {
   id: string
   total: number
   createdAt: Date | null
-  paymentMethod?: string | null
+  tenders: Record<string, number>
+  tenderSummary: string | null
   items: { name?: string | null; qty?: number | null }[]
 }
 
@@ -57,7 +70,7 @@ type CachedSaleRecord = {
   customer?: { id?: string | null } | null
   createdAt?: unknown
   total?: unknown
-  payment?: { method?: unknown } | null
+  tenders?: Record<string, unknown> | null
   items?: unknown
 } & Record<string, unknown>
 
@@ -124,62 +137,32 @@ function normalizeTags(input: string): string[] {
   )
 }
 
+function normalizeTenderEntries(tenders: Record<string, unknown>): Array<{ method: string; amount: number }> {
+  return Object.entries(tenders)
+    .map(([method, value]) => ({ method, amount: typeof value === 'number' ? value : Number(value) }))
+    .filter(entry => Number.isFinite(entry.amount) && entry.amount > 0)
+}
+
+function formatTenderMethod(method: string): string {
+  const normalized = method.trim().toLowerCase()
+  if (!normalized) return 'Unknown'
+  if (normalized === 'cash') return 'Cash'
+  if (normalized === 'card') return 'Card'
+  if (normalized === 'mobile') return 'Mobile'
+  return method
+}
+
+function formatTenderSummary(tenders: Record<string, unknown>): string | null {
+  const entries = normalizeTenderEntries(tenders)
+  if (!entries.length) return null
+  return entries
+    .map(entry => `${formatTenderMethod(entry.method)} ${formatCurrency(entry.amount)}`)
+    .join(' • ')
+}
+
 function formatDate(date: Date | null): string {
   if (!date) return '—'
   return `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
-}
-
-function parseCsv(text: string): string[][] {
-  const rows: string[][] = []
-  let current = ''
-  let row: string[] = []
-  let insideQuotes = false
-
-  const pushValue = () => {
-    row.push(current)
-    current = ''
-  }
-
-  const pushRow = () => {
-    if (!row.length) return
-    rows.push(row.map(cell => cell.trim()))
-    row = []
-  }
-
-  for (let i = 0; i < text.length; i += 1) {
-    const char = text[i]
-    if (char === '"') {
-      if (insideQuotes && text[i + 1] === '"') {
-        current += '"'
-        i += 1
-      } else {
-        insideQuotes = !insideQuotes
-      }
-    } else if (char === ',' && !insideQuotes) {
-      pushValue()
-    } else if ((char === '\n' || char === '\r') && !insideQuotes) {
-      if (char === '\r' && text[i + 1] === '\n') {
-        i += 1
-      }
-      pushValue()
-      if (row.some(cell => cell.trim().length > 0)) {
-        pushRow()
-      } else {
-        row = []
-      }
-    } else {
-      current += char
-    }
-  }
-
-  if (current.length > 0 || row.length > 0) {
-    pushValue()
-    if (row.some(cell => cell.trim().length > 0)) {
-      pushRow()
-    }
-  }
-
-  return rows
 }
 
 function buildCsvValue(value: string): string {
@@ -190,7 +173,7 @@ function buildCsvValue(value: string): string {
 }
 
 export default function Customers() {
-  const { storeId: activeStoreId } = useActiveStoreContext()
+  const { storeId: activeStoreId, storeChangeToken } = useActiveStoreContext()
   const [customers, setCustomers] = useState<Customer[]>([])
   const [name, setName] = useState('')
   const [phone, setPhone] = useState('')
@@ -233,6 +216,8 @@ export default function Customers() {
   useEffect(() => {
     let cancelled = false
 
+    setCustomers([])
+
     if (!activeStoreId) {
       setCustomers([])
       return () => {
@@ -240,11 +225,12 @@ export default function Customers() {
       }
     }
 
-    loadCachedCustomers<Customer>({ storeId: activeStoreId })
+    loadCachedCustomers<FirestoreCustomer>({ storeId: activeStoreId })
       .then(cached => {
         if (!cancelled && cached.length) {
+          const normalized = cached.map(entry => ensureCustomerLoyalty(entry))
           setCustomers(
-            [...cached].sort((a, b) =>
+            [...normalized].sort((a, b) =>
               getCustomerSortKey(a).localeCompare(getCustomerSortKey(b), undefined, {
                 sensitivity: 'base',
               }),
@@ -266,11 +252,11 @@ export default function Customers() {
 
     const unsubscribe = onSnapshot(q, snap => {
       const rows = snap.docs.map(docSnap => {
-        const data = docSnap.data() as Omit<Customer, 'id'>
-        return {
+        const data = docSnap.data() as Omit<FirestoreCustomer, 'id'>
+        return ensureCustomerLoyalty({
           id: docSnap.id,
           ...data,
-        }
+        })
       })
       saveCachedCustomers(rows, { storeId: activeStoreId }).catch(error => {
         console.warn('[customers] Failed to cache customers', error)
@@ -287,7 +273,7 @@ export default function Customers() {
       cancelled = true
       unsubscribe()
     }
-  }, [activeStoreId])
+  }, [activeStoreId, storeChangeToken])
 
   function normalizeSaleDate(value: unknown): Date | null {
     if (!value) return null
@@ -331,10 +317,18 @@ export default function Customers() {
 
       const createdAt = normalizeSaleDate(record.createdAt)
       const total = Number(record.total ?? 0) || 0
-      const paymentMethod =
-        record.payment && typeof record.payment === 'object'
-          ? (record.payment as { method?: string | null }).method ?? null
+      const tenderEntries =
+        record.tenders && typeof record.tenders === 'object'
+          ? normalizeTenderEntries(record.tenders as Record<string, unknown>)
+          : []
+      const tenderSummary =
+        record.tenders && typeof record.tenders === 'object'
+          ? formatTenderSummary(record.tenders as Record<string, unknown>)
           : null
+      const tenders = tenderEntries.reduce<Record<string, number>>((acc, entry) => {
+        acc[entry.method] = entry.amount
+        return acc
+      }, {})
       const itemsSource = Array.isArray(record.items) ? record.items : []
       const items = itemsSource.map(item =>
         item && typeof item === 'object'
@@ -356,7 +350,8 @@ export default function Customers() {
         id: record.id,
         total,
         createdAt,
-        paymentMethod,
+        tenders,
+        tenderSummary,
         items: items.map(item => ({
           name: item?.name ?? null,
           qty: item?.qty ?? null,
@@ -380,6 +375,9 @@ export default function Customers() {
 
   useEffect(() => {
     let cancelled = false
+
+    setCustomerStats({})
+    setSalesHistory({})
 
     if (!activeStoreId) {
       setCustomerStats({})
@@ -418,7 +416,17 @@ export default function Customers() {
       cancelled = true
       unsubscribe()
     }
-  }, [activeStoreId])
+  }, [activeStoreId, storeChangeToken])
+
+  useEffect(() => {
+    setSelectedCustomerId(null)
+    setEditingCustomerId(null)
+    setSearchTerm('')
+    setTagFilter(null)
+    setQuickFilter('all')
+    setSuccess(null)
+    setError(null)
+  }, [storeChangeToken])
 
   useEffect(() => {
     if (!selectedCustomerId) return
@@ -436,15 +444,7 @@ export default function Customers() {
     }
   }, [customers, editingCustomerId])
 
-  const currencyFormatter = useMemo(
-    () =>
-      new Intl.NumberFormat('en-US', {
-        style: 'currency',
-        currency: 'GHS',
-        minimumFractionDigits: 2,
-      }),
-    []
-  )
+  const currencyFormatter = useMemo(() => (amount: number) => formatCurrency(amount), [])
 
   const allTags = useMemo(() => {
     const tagSet = new Set<string>()
@@ -510,6 +510,11 @@ export default function Customers() {
     ? getCustomerDisplayName(selectedCustomer)
     : '—'
 
+  const selectedCustomerLoyalty = selectedCustomer?.loyalty ?? createCustomerLoyalty()
+  const selectedCustomerLoyaltyLastVisit = loyaltyTimestampToDate(
+    selectedCustomerLoyalty.lastVisitAt,
+  )
+
   const selectedCustomerHistory = selectedCustomerId
     ? salesHistory[selectedCustomerId] ?? []
     : []
@@ -531,6 +536,9 @@ export default function Customers() {
   async function addCustomer(event: React.FormEvent) {
     event.preventDefault()
     const trimmedName = name.trim()
+    const trimmedPhone = phone.trim()
+    const trimmedEmail = email.trim()
+    const trimmedNotes = notes.trim()
     if (!trimmedName) {
       setError('Customer name is required to save a record.')
       return
@@ -543,31 +551,69 @@ export default function Customers() {
     setError(null)
     try {
       const parsedTags = normalizeTags(tagsInput)
+      const existingRecord = editingCustomerId
+        ? customers.find(customer => customer.id === editingCustomerId)
+        : null
+      const existingLoyalty = normalizeCustomerLoyalty(existingRecord?.loyalty)
       if (editingCustomerId) {
         const updatePayload: Record<string, unknown> = {
           name: trimmedName,
           updatedAt: serverTimestamp(),
           storeId: activeStoreId,
         }
-        updatePayload.phone = phone.trim() ? phone.trim() : null
-        updatePayload.email = email.trim() ? email.trim() : null
-        updatePayload.notes = notes.trim() ? notes.trim() : null
+        updatePayload.phone = trimmedPhone ? trimmedPhone : null
+        updatePayload.email = trimmedEmail ? trimmedEmail : null
+        updatePayload.notes = trimmedNotes ? trimmedNotes : null
         updatePayload.tags = parsedTags
+        updatePayload.loyalty = existingLoyalty
         await updateDoc(doc(db, 'customers', editingCustomerId), updatePayload)
         setSelectedCustomerId(editingCustomerId)
         showSuccess('Customer updated successfully.')
       } else {
-        await addDoc(collection(db, 'customers'), {
-          name: trimmedName,
-          storeId: activeStoreId,
-          ...(phone.trim() ? { phone: phone.trim() } : {}),
-          ...(email.trim() ? { email: email.trim() } : {}),
-          ...(notes.trim() ? { notes: notes.trim() } : {}),
-          ...(parsedTags.length ? { tags: parsedTags } : {}),
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        })
-        showSuccess('Customer saved successfully.')
+        const normalizedPhone = trimmedPhone.replace(/\D/g, '')
+        const normalizedEmail = trimmedEmail.toLowerCase()
+
+        const matchByEmail = normalizedEmail
+          ? customers.find(customer => customer.email?.trim().toLowerCase() === normalizedEmail) ?? null
+          : null
+        let duplicate = matchByEmail
+
+        if (!duplicate && normalizedPhone) {
+          duplicate =
+            customers.find(customer => {
+              const existingPhone = customer.phone?.replace(/\D/g, '') ?? ''
+              return existingPhone && existingPhone === normalizedPhone
+            }) ?? null
+        }
+
+        if (duplicate) {
+          const updatePayload: Record<string, unknown> = {
+            name: trimmedName,
+            updatedAt: serverTimestamp(),
+            storeId: activeStoreId,
+          }
+          updatePayload.phone = trimmedPhone ? trimmedPhone : null
+          updatePayload.email = trimmedEmail ? trimmedEmail : null
+          updatePayload.notes = trimmedNotes ? trimmedNotes : null
+          updatePayload.tags = parsedTags
+          updatePayload.loyalty = normalizeCustomerLoyalty(duplicate.loyalty)
+          await updateDoc(doc(db, 'customers', duplicate.id), updatePayload)
+          setSelectedCustomerId(duplicate.id)
+          showSuccess('Customer already exists. Updated their details instead.')
+        } else {
+          await addDoc(collection(db, 'customers'), {
+            name: trimmedName,
+            storeId: activeStoreId,
+            ...(trimmedPhone ? { phone: trimmedPhone } : {}),
+            ...(trimmedEmail ? { email: trimmedEmail } : {}),
+            ...(trimmedNotes ? { notes: trimmedNotes } : {}),
+            ...(parsedTags.length ? { tags: parsedTags } : {}),
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+            loyalty: createCustomerLoyalty(),
+          })
+          showSuccess('Customer saved successfully.')
+        }
       }
       resetForm()
     } catch (err) {
@@ -680,6 +726,8 @@ export default function Customers() {
           if (parsedTags) {
             payload.tags = parsedTags
           }
+          const existing = customers.find(customer => customer.id === existingId)
+          payload.loyalty = normalizeCustomerLoyalty(existing?.loyalty)
           await updateDoc(doc(db, 'customers', existingId), payload)
           updatedCount += 1
         } else {
@@ -700,6 +748,7 @@ export default function Customers() {
           if (parsedTags && parsedTags.length) {
             payload.tags = parsedTags
           }
+          payload.loyalty = createCustomerLoyalty()
           await addDoc(collection(db, 'customers'), payload)
           newCount += 1
         }
@@ -1024,7 +1073,7 @@ export default function Customers() {
                         </td>
                         <td>{visitCount}</td>
                         <td>{lastVisit ? lastVisit.toLocaleDateString() : '—'}</td>
-                        <td>{visitCount ? currencyFormatter.format(totalSpend) : '—'}</td>
+                        <td>{visitCount ? currencyFormatter(totalSpend) : '—'}</td>
                         <td className="customers-page__table-actions">
                           <button
                             type="button"
@@ -1108,6 +1157,14 @@ export default function Customers() {
                   </dd>
                 </div>
                 <div>
+                  <dt>Loyalty points</dt>
+                  <dd>{selectedCustomerLoyalty.points}</dd>
+                </div>
+                <div>
+                  <dt>Loyalty last visit</dt>
+                  <dd>{formatDate(selectedCustomerLoyaltyLastVisit)}</dd>
+                </div>
+                <div>
                   <dt>Total visits</dt>
                   <dd>{selectedCustomerStats.visits}</dd>
                 </div>
@@ -1115,7 +1172,7 @@ export default function Customers() {
                   <dt>Total spend</dt>
                   <dd>
                     {selectedCustomerStats.visits
-                      ? currencyFormatter.format(selectedCustomerStats.totalSpend)
+                      ? currencyFormatter(selectedCustomerStats.totalSpend)
                       : '—'}
                   </dd>
                 </div>
@@ -1135,10 +1192,12 @@ export default function Customers() {
                           <span className="customers-page__history-primary">
                             {entry.createdAt ? entry.createdAt.toLocaleString() : 'Unknown date'}
                           </span>
-                          <span className="customers-page__history-total">{currencyFormatter.format(entry.total)}</span>
+                          <span className="customers-page__history-total">{currencyFormatter(entry.total)}</span>
                         </div>
                         <div className="customers-page__history-meta">
-                          {entry.paymentMethod ? `Paid via ${entry.paymentMethod}` : 'Payment method not recorded'}
+                          {entry.tenderSummary
+                            ? `Paid: ${entry.tenderSummary}`
+                            : 'Tender details not recorded'}
                         </div>
                         {entry.items?.length ? (
                           <div className="customers-page__history-items">

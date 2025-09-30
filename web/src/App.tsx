@@ -1,5 +1,5 @@
 // web/src/App.tsx
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import type { User } from 'firebase/auth'
 import {
   createUserWithEmailAndPassword,
@@ -18,8 +18,15 @@ import {
   persistSession,
   refreshSessionHeartbeat,
 } from './controllers/sessionController'
+import { afterSignupBootstrap } from './controllers/accessController'
 import { AuthUserContext } from './hooks/useAuthUser'
+import {
+  clearActiveStoreIdForUser,
+  clearLegacyActiveStoreId,
+  persistActiveStoreIdForUser,
+} from './utils/activeStoreStorage'
 import { getOnboardingStatus, setOnboardingStatus } from './utils/onboarding'
+import type { QueueRequestType } from './utils/offlineQueue'
 
 /* ------------------------------ config ------------------------------ */
 /** If you want to ALSO mirror the team member to a fixed doc id, put it here. */
@@ -31,20 +38,51 @@ type AuthMode = 'login' | 'signup'
 type StatusTone = 'idle' | 'loading' | 'success' | 'error'
 interface StatusState { tone: StatusTone; message: string }
 
-type QueueRequestType = 'sale' | 'receipt'
-
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const PASSWORD_MIN_LENGTH = 8
 const LOGIN_IMAGE_URL = 'https://i.imgur.com/fx9vne9.jpeg'
 const OWNER_NAME_FALLBACK = 'Owner account'
+const DEFAULT_COUNTRY_CODE = '+1'
+const COUNTRY_OPTIONS = [
+  { code: '+1', label: 'United States / Canada (+1)' },
+  { code: '+44', label: 'United Kingdom (+44)' },
+  { code: '+234', label: 'Nigeria (+234)' },
+  { code: '+61', label: 'Australia (+61)' },
+  { code: '+91', label: 'India (+91)' },
+  { code: '+65', label: 'Singapore (+65)' },
+] as const
 
 /* ------------------------------ helpers ------------------------------ */
 
-function sanitizePhone(value: string): string {
-  return value.replace(/\D+/g, '')
+type PhoneComposition = {
+  countryCode: string
+  localNumber: string
+  e164: string
 }
-function persistActiveStoreId(storeId: string) {
-  try { window.localStorage.setItem('activeStoreId', storeId) } catch {}
+
+function composePhoneNumber(countryCode: string, localNumber: string): PhoneComposition {
+  const trimmedCountry = (countryCode || '').trim()
+  const trimmedLocal = (localNumber || '').trim()
+
+  let normalizedCountry = trimmedCountry.replace(/^00/, '+').replace(/[^+\d]/g, '')
+  if (normalizedCountry && !normalizedCountry.startsWith('+')) {
+    normalizedCountry = `+${normalizedCountry.replace(/^\++/, '')}`
+  }
+  if (normalizedCountry === '+') {
+    normalizedCountry = ''
+  }
+
+  const normalizedLocal = trimmedLocal.replace(/\D+/g, '')
+  const e164 = normalizedCountry && normalizedLocal ? `${normalizedCountry}${normalizedLocal}` : ''
+
+  return {
+    countryCode: normalizedCountry,
+    localNumber: normalizedLocal,
+    e164,
+  }
+}
+function persistActiveStoreId(storeId: string, uid: string) {
+  persistActiveStoreIdForUser(uid, storeId)
 }
 function resolveOwnerName(user: User): string {
   const displayName = user.displayName?.trim()
@@ -59,11 +97,22 @@ async function upsertTeamMemberDocs(params: {
   user: User
   role: 'owner' | 'staff'
   phone?: string | null
+  phoneCountryCode?: string | null
+  phoneLocalNumber?: string | null
   company?: string | null
   preferExisting?: boolean
 }) {
-  const { user, role, phone = null, company = null, preferExisting = true } = params
+  const {
+    user,
+    role,
+    phone = null,
+    phoneCountryCode = null,
+    phoneLocalNumber = null,
+    company = null,
+    preferExisting = true,
+  } = params
   const uidRef = doc(db, 'teamMembers', user.uid)
+  const lastSeenAt = serverTimestamp()
 
   // Try to reuse existing storeId if present
   if (preferExisting) {
@@ -71,12 +120,13 @@ async function upsertTeamMemberDocs(params: {
     if (snap.exists()) {
       const existingStoreId = String(snap.get('storeId') || '')
       if (existingStoreId) {
-        persistActiveStoreId(existingStoreId)
+        await setDoc(uidRef, { lastSeenAt }, { merge: true })
+        persistActiveStoreId(existingStoreId, user.uid)
         // Optionally mirror to fixed doc for your analytics/admin
         if (OVERRIDE_MEMBER_DOC_ID) {
           await setDoc(
             doc(db, 'teamMembers', OVERRIDE_MEMBER_DOC_ID),
-            { ...snap.data(), updatedAt: serverTimestamp() },
+            { ...snap.data(), lastSeenAt, updatedAt: serverTimestamp() },
             { merge: true },
           )
         }
@@ -86,18 +136,22 @@ async function upsertTeamMemberDocs(params: {
   }
 
   const storeId = generateStoreId(user.uid)
+  const timestamp = serverTimestamp()
   const payload = {
     uid: user.uid,
     email: user.email ?? null,
     phone,
+    phoneCountryCode,
+    phoneLocalNumber,
     role,
     company: company ?? null,
     storeId,
     name: resolveOwnerName(user),
     firstSignupEmail: (user.email ?? '').toLowerCase() || null,
     invitedBy: user.uid,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    lastSeenAt,
   }
 
   await setDoc(uidRef, payload, { merge: true })
@@ -106,7 +160,7 @@ async function upsertTeamMemberDocs(params: {
     await setDoc(doc(db, 'teamMembers', OVERRIDE_MEMBER_DOC_ID), payload, { merge: true })
   }
 
-  persistActiveStoreId(storeId)
+  persistActiveStoreId(storeId, user.uid)
   return { storeId, role }
 }
 
@@ -191,6 +245,7 @@ function normalizeQueueError(v: unknown): string | null { if (typeof v === 'stri
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null)
+  const previousUidRef = useRef<string | null>(null)
   const [isAuthReady, setIsAuthReady] = useState(false)
 
   const [mode, setMode] = useState<AuthMode>('login')
@@ -202,6 +257,7 @@ export default function App() {
   const [role, setRole] = useState<'owner' | 'staff'>('staff')
   const [company, setCompany] = useState('')
 
+  const [countryCode, setCountryCode] = useState(DEFAULT_COUNTRY_CODE)
   const [phone, setPhone] = useState('')
   const [normalizedPhone, setNormalizedPhone] = useState('')
 
@@ -244,6 +300,18 @@ export default function App() {
   useEffect(() => {
     configureAuthPersistence(auth).catch(() => {})
     const unsubscribe = onAuthStateChanged(auth, nextUser => {
+      const previousUid = previousUidRef.current
+
+      if (!nextUser) {
+        if (previousUid) {
+          clearActiveStoreIdForUser(previousUid)
+        }
+        clearLegacyActiveStoreId()
+      } else if (previousUid && previousUid !== nextUser.uid) {
+        clearActiveStoreIdForUser(previousUid)
+      }
+
+      previousUidRef.current = nextUser?.uid ?? null
       setUser(nextUser)
       setIsAuthReady(true)
     })
@@ -292,7 +360,7 @@ export default function App() {
     return () => navigator.serviceWorker.removeEventListener('message', handleMessage)
   }, [publish])
 
-  async function persistOwnerSideDocs(nextUser: User, storeId: string, phone: string) {
+  async function persistOwnerSideDocs(nextUser: User, storeId: string, phone: PhoneComposition) {
     // Optional: create a matching customers record
     try {
       const preferredDisplayName = nextUser.displayName?.trim() || (nextUser.email ?? '')
@@ -303,7 +371,9 @@ export default function App() {
           name: preferredDisplayName,
           displayName: preferredDisplayName,
           email: (nextUser.email ?? '').toLowerCase(),
-          phone,
+          phone: phone.e164 || null,
+          phoneCountryCode: phone.countryCode || null,
+          phoneLocalNumber: phone.localNumber || null,
           status: 'active',
           role: 'client',
           createdAt: serverTimestamp(),
@@ -321,7 +391,8 @@ export default function App() {
     const sanitizedEmail = email.trim()
     const sanitizedPassword = password.trim()
     const sanitizedConfirmPassword = confirmPassword.trim()
-    const sanitizedPhone = sanitizePhone(phone)
+    const phoneDetails = composePhoneNumber(countryCode, phone)
+    const sanitizedPhone = phoneDetails.e164
     const sanitizedCompany = company.trim()
 
     setEmail(sanitizedEmail)
@@ -334,7 +405,8 @@ export default function App() {
         : getSignupValidationError(sanitizedEmail, sanitizedPassword, sanitizedConfirmPassword, sanitizedPhone, sanitizedCompany)
 
     if (mode === 'signup') {
-      setPhone(sanitizedPhone)
+      setCountryCode(phoneDetails.countryCode || DEFAULT_COUNTRY_CODE)
+      setPhone(phoneDetails.localNumber)
       setNormalizedPhone(sanitizedPhone)
       if (!sanitizedPhone) {
         setStatus({ tone: 'error', message: 'Enter your phone number.' })
@@ -371,11 +443,28 @@ export default function App() {
           role,
           company: sanitizedCompany,
           phone: sanitizedPhone,
+          phoneCountryCode: phoneDetails.countryCode || null,
+          phoneLocalNumber: phoneDetails.localNumber || null,
           preferExisting: false,
         })
 
+        const ownerName = resolveOwnerName(nextUser)
+        await afterSignupBootstrap({
+          storeId,
+          contact: {
+            phone: sanitizedPhone || null,
+            phoneCountryCode: phoneDetails.countryCode || null,
+            phoneLocalNumber: phoneDetails.localNumber || null,
+            firstSignupEmail: (nextUser.email ?? '').toLowerCase() || null,
+            company: sanitizedCompany || null,
+            ownerName,
+          },
+        })
+
         // Optional additional doc for UX
-        await persistOwnerSideDocs(nextUser, storeId, sanitizedPhone)
+        await persistOwnerSideDocs(nextUser, storeId, phoneDetails)
+
+        await afterSignupBootstrap(storeId)
 
         try { await nextUser.getIdToken(true) } catch {}
         setOnboardingStatus(nextUser.uid, 'pending')
@@ -390,6 +479,7 @@ export default function App() {
       setPhone('')
       setCompany('')
       setNormalizedPhone('')
+      setCountryCode(DEFAULT_COUNTRY_CODE)
 
     } catch (err: unknown) {
       setStatus({ tone: 'error', message: getErrorMessage(err) })
@@ -410,6 +500,7 @@ export default function App() {
     setPhone('')
     setCompany('')
     setNormalizedPhone('')
+    setCountryCode(DEFAULT_COUNTRY_CODE)
   }
 
   const appStyle: React.CSSProperties = { minHeight: '100dvh' }
@@ -525,31 +616,56 @@ export default function App() {
 
                   <div className="form__field">
                     <label htmlFor="phone">Phone</label>
-                    <input
-                      id="phone"
-                      value={phone}
-                      onChange={e => {
-                        const next = e.target.value
-                        setPhone(next)
-                        setNormalizedPhone(sanitizePhone(next))
-                      }}
-                      onBlur={() =>
-                        setPhone(current => {
-                          const trimmed = current.trim()
-                          const sanitized = sanitizePhone(trimmed)
-                          setNormalizedPhone(sanitized)
-                          return sanitized
-                        })
-                      }
-                      type="tel"
-                      autoComplete="tel"
-                      inputMode="tel"
-                      placeholder="(555) 123-4567"
-                      required
-                      disabled={isLoading}
-                      aria-invalid={phone.length > 0 && normalizedPhone.length === 0}
-                      aria-describedby="phone-hint"
-                    />
+                    <div className="form__phone-row">
+                      <div className="form__phone-country">
+                        <label className="visually-hidden" htmlFor="country-code">
+                          Country code
+                        </label>
+                        <select
+                          id="country-code"
+                          value={countryCode}
+                          onChange={e => {
+                            const nextCode = e.target.value
+                            setCountryCode(nextCode)
+                            const composed = composePhoneNumber(nextCode, phone)
+                            setNormalizedPhone(composed.e164)
+                          }}
+                          disabled={isLoading}
+                        >
+                          {COUNTRY_OPTIONS.map(option => (
+                            <option key={option.code} value={option.code}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <input
+                        id="phone"
+                        value={phone}
+                        onChange={e => {
+                          const next = e.target.value
+                          setPhone(next)
+                          const composed = composePhoneNumber(countryCode, next)
+                          setNormalizedPhone(composed.e164)
+                        }}
+                        onBlur={() =>
+                          setPhone(current => {
+                            const trimmed = current.trim()
+                            const composed = composePhoneNumber(countryCode, trimmed)
+                            setNormalizedPhone(composed.e164)
+                            return composed.localNumber
+                          })
+                        }
+                        type="tel"
+                        autoComplete="tel"
+                        inputMode="tel"
+                        placeholder="(555) 123-4567"
+                        required
+                        disabled={isLoading}
+                        aria-invalid={phone.length > 0 && normalizedPhone.length === 0}
+                        aria-describedby="phone-hint"
+                      />
+                    </div>
                     <p className="form__hint" id="phone-hint">
                       We’ll use this to tailor your onboarding.
                     </p>

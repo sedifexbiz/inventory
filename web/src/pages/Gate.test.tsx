@@ -18,7 +18,15 @@ describe('Gate', () => {
   beforeEach(() => {
     mockUseActiveStoreContext.mockReset();
     mockUseMemberships.mockReset();
-    mockUseActiveStoreContext.mockReturnValue({ storeId: 'store-1', isLoading: false, error: null });
+    mockUseActiveStoreContext.mockReturnValue({
+      storeId: 'store-1',
+      isLoading: false,
+      error: null,
+      memberships: [],
+      membershipsLoading: false,
+      setActiveStoreId: vi.fn(),
+      storeChangeToken: 0,
+    });
   });
 
   it('renders a loading state while memberships are loading', () => {

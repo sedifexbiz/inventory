@@ -14,13 +14,22 @@
     "isolatedModules": true,
     "noEmit": true,
     "jsx": "react-jsx",
+    "baseUrl": ".",
+    "paths": {
+      "@shared/*": ["../shared/*"]
+    },
     "types": [
       "vite/client",
       "vitest/globals"
-    ]
+    ],
+    "baseUrl": "./",
+    "paths": {
+      "@shared/*": ["../shared/*"]
+    }
   },
   "include": [
     "src",
-    "tests"
+    "tests",
+    "../shared"
   ]
 }

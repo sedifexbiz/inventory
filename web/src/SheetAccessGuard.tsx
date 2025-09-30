@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { onAuthStateChanged, signOut, type User } from 'firebase/auth'
 import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore'
 import { auth, db } from './firebase'
+import { clearActiveStoreIdForUser, persistActiveStoreIdForUser } from './utils/activeStoreStorage'
 
 type TeamMemberSnapshot = {
   storeId: string | null
@@ -97,16 +98,12 @@ export default function SheetAccessGuard({ children }: { children: React.ReactNo
           throw new Error('Your Sedifex workspace contract is not active.')
         }
 
-        if (typeof window !== 'undefined') {
-          window.localStorage.setItem('activeStoreId', member.storeId)
-        }
+        persistActiveStoreIdForUser(user.uid, member.storeId)
       } catch (e: unknown) {
         const message = e instanceof Error ? e.message : 'Access denied.'
         setError(message)
         await signOut(auth)
-        if (typeof window !== 'undefined') {
-          window.localStorage.removeItem('activeStoreId')
-        }
+        clearActiveStoreIdForUser(user.uid)
       } finally {
         setReady(true)
       }

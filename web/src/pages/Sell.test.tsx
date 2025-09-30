@@ -11,7 +11,15 @@ vi.mock('../hooks/useAuthUser', () => ({
   useAuthUser: () => mockUseAuthUser(),
 }))
 
-const mockUseActiveStoreContext = vi.fn(() => ({ storeId: 'store-1', isLoading: false, error: null }))
+const mockUseActiveStoreContext = vi.fn(() => ({
+  storeId: 'store-1',
+  isLoading: false,
+  error: null,
+  memberships: [],
+  membershipsLoading: false,
+  setActiveStoreId: vi.fn(),
+  storeChangeToken: 0,
+}))
 vi.mock('../context/ActiveStoreProvider', () => ({
   useActiveStoreContext: () => mockUseActiveStoreContext(),
 }))
@@ -206,7 +214,15 @@ describe('Sell page', () => {
       uid: 'cashier-123',
       email: 'cashier@example.com',
     })
-    mockUseActiveStoreContext.mockReturnValue({ storeId: 'store-1', isLoading: false, error: null })
+    mockUseActiveStoreContext.mockReturnValue({
+      storeId: 'store-1',
+      isLoading: false,
+      error: null,
+      memberships: [],
+      membershipsLoading: false,
+      setActiveStoreId: vi.fn(),
+      storeChangeToken: 0,
+    })
 
     autoCounters = {}
     firestoreState = {
@@ -254,7 +270,8 @@ describe('Sell page', () => {
     expect(saleOperation?.data).toMatchObject({
       branchId: 'store-1',
       total: 12,
-      payment: { method: 'cash', amountPaid: 15, changeDue: 3 },
+      tenders: { cash: 15 },
+      changeDue: 3,
       items: [expect.objectContaining({ productId: 'product-1', qty: 1, price: 12 })],
     })
 
